@@ -45,11 +45,15 @@ export function show(node: CodeRenderable, sentence: Range, word: Range) {
     [sentence.start, sentence.end, "speech.sentence"],
     [word.start, word.end, "speech.word"],
   ]
+  node.requestRender()
   setReading(node)
 }
 
 export function clear() {
-  if (lit && !lit.node.isDestroyed) lit.node.onHighlight = lit.base
+  if (lit && !lit.node.isDestroyed) {
+    lit.node.onHighlight = lit.base
+    lit.node.requestRender()
+  }
   lit = undefined
   setReading(undefined)
 }
