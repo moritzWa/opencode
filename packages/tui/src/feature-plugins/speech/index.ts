@@ -135,6 +135,7 @@ const tui: TuiPlugin = async (api) => {
         name: command.toggle,
         title: "Read answer aloud / pause",
         category: "Speech",
+        namespace: "palette",
         run() {
           void toggle()
           return true
@@ -144,6 +145,7 @@ const tui: TuiPlugin = async (api) => {
         name: command.stop,
         title: "Stop reading aloud",
         category: "Speech",
+        namespace: "palette",
         run() {
           stop()
           return true
@@ -153,6 +155,7 @@ const tui: TuiPlugin = async (api) => {
         name: command.restart,
         title: "Read answer from the start",
         category: "Speech",
+        namespace: "palette",
         run() {
           void restart()
           return true
@@ -162,6 +165,7 @@ const tui: TuiPlugin = async (api) => {
         name: command.faster,
         title: "Read aloud faster",
         category: "Speech",
+        namespace: "palette",
         run() {
           void speed(0.25)
           return true
@@ -171,6 +175,7 @@ const tui: TuiPlugin = async (api) => {
         name: command.slower,
         title: "Read aloud slower",
         category: "Speech",
+        namespace: "palette",
         run() {
           void speed(-0.25)
           return true
