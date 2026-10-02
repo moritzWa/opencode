@@ -4,6 +4,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { SessionID } from "@/session/schema"
 import { QuestionID } from "./schema"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { waitForAbort } from "@/effect/abort"
 import { QuestionV1 } from "@opencode-ai/schema/question-v1"
 
 export const Option = QuestionV1.Option
@@ -46,11 +47,19 @@ interface State {
 // Service
 
 export interface Interface {
-  readonly ask: (input: {
-    sessionID: SessionID
-    questions: ReadonlyArray<Info>
-    tool?: Tool
-  }) => Effect.Effect<ReadonlyArray<Answer>, RejectedError>
+  /**
+   * Resolves with the user's answers. A pending question is withdrawn, with a
+   * rejected event published so clients drop the prompt, when `abort` fires or
+   * the caller is interrupted.
+   */
+  readonly ask: (
+    input: {
+      sessionID: SessionID
+      questions: ReadonlyArray<Info>
+      tool?: Tool
+    },
+    abort?: AbortSignal,
+  ) => Effect.Effect<ReadonlyArray<Answer>, RejectedError>
   readonly reply: (input: {
     requestID: QuestionID
     answers: ReadonlyArray<Answer>
@@ -84,11 +93,14 @@ const layer = Layer.effect(
       }),
     )
 
-    const ask = Effect.fn("Question.ask")(function* (input: {
-      sessionID: SessionID
-      questions: ReadonlyArray<Info>
-      tool?: Tool
-    }) {
+    const ask = Effect.fn("Question.ask")(function* (
+      input: {
+        sessionID: SessionID
+        questions: ReadonlyArray<Info>
+        tool?: Tool
+      },
+      abort?: AbortSignal,
+    ) {
       const pending = (yield* InstanceState.get(state)).pending
       const id = QuestionID.ascending()
       yield* Effect.logInfo("asking", { id, questions: input.questions.length })
@@ -103,11 +115,23 @@ const layer = Layer.effect(
       pending.set(id, { info, deferred })
       yield* events.publish(Event.Asked, info)
 
-      return yield* Effect.ensuring(
-        Deferred.await(deferred),
-        Effect.sync(() => {
-          pending.delete(id)
-        }),
+      const withdraw = Effect.suspend(() => {
+        if (!pending.delete(id)) return Effect.void
+        return events.publish(Event.Rejected, { sessionID: info.sessionID, requestID: id })
+      })
+      const answer = abort
+        ? Effect.raceFirst(
+            Deferred.await(deferred),
+            waitForAbort(abort).pipe(Effect.andThen(withdraw), Effect.andThen(Effect.fail(new RejectedError()))),
+          )
+        : Deferred.await(deferred)
+      return yield* answer.pipe(
+        Effect.onInterrupt(() => withdraw),
+        Effect.ensuring(
+          Effect.sync(() => {
+            pending.delete(id)
+          }),
+        ),
       )
     })
 

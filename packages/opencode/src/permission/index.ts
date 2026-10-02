@@ -6,11 +6,17 @@ import { Deferred, Effect, Layer, Context } from "effect"
 import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { waitForAbort } from "@/effect/abort"
 
 export const Event = PermissionV1.Event
 
 export interface Interface {
-  readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
+  /**
+   * Resolves once the request is allowed. A pending request is withdrawn, with a
+   * reject reply published so clients drop the prompt, when `abort` fires or the
+   * caller is interrupted.
+   */
+  readonly ask: (input: PermissionV1.AskInput, abort?: AbortSignal) => Effect.Effect<void, PermissionV1.Error>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
 }
@@ -64,7 +70,7 @@ const layer = Layer.effect(
       }),
     )
 
-    const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
+    const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput, abort?: AbortSignal) {
       const { approved, pending } = yield* InstanceState.get(state)
       const { ruleset, ...request } = input
       let needsAsk = false
@@ -98,11 +104,27 @@ const layer = Layer.effect(
       const deferred = yield* Deferred.make<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>()
       pending.set(id, { info, deferred })
       yield* events.publish(Event.Asked, info)
-      return yield* Effect.ensuring(
-        Deferred.await(deferred),
-        Effect.sync(() => {
-          pending.delete(id)
-        }),
+
+      const withdraw = Effect.suspend(() => {
+        if (!pending.delete(id)) return Effect.void
+        return events.publish(Event.Replied, { sessionID: info.sessionID, requestID: id, reply: "reject" })
+      })
+      const answer = abort
+        ? Effect.raceFirst(
+            Deferred.await(deferred),
+            waitForAbort(abort).pipe(
+              Effect.andThen(withdraw),
+              Effect.andThen(Effect.fail(new PermissionV1.RejectedError())),
+            ),
+          )
+        : Deferred.await(deferred)
+      return yield* answer.pipe(
+        Effect.onInterrupt(() => withdraw),
+        Effect.ensuring(
+          Effect.sync(() => {
+            pending.delete(id)
+          }),
+        ),
       )
     })
 

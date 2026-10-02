@@ -184,15 +184,18 @@ const live: Layer.Layer<
             })
             const uniquePatterns = [...new Set(toolPatterns)] as string[]
             await bridge.promise(
-              perm.ask({
-                id,
-                sessionID: SessionID.make(input.sessionID),
-                permission: "workflow_tool_approval",
-                patterns: uniquePatterns,
-                metadata: { tools: approvalTools },
-                always: uniquePatterns,
-                ruleset: [],
-              }),
+              perm.ask(
+                {
+                  id,
+                  sessionID: SessionID.make(input.sessionID),
+                  permission: "workflow_tool_approval",
+                  patterns: uniquePatterns,
+                  metadata: { tools: approvalTools },
+                  always: uniquePatterns,
+                  ruleset: [],
+                },
+                input.abort,
+              ),
             )
             for (const name of uniqueNames) approvedToolsForSession.add(name)
             workflowModel.sessionPreapprovedTools = [...(workflowModel.sessionPreapprovedTools ?? []), ...uniqueNames]
