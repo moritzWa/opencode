@@ -9,6 +9,7 @@ import SidebarMcp from "./sidebar/mcp"
 import SidebarTodo from "./sidebar/todo"
 import DiffViewer from "./system/diff-viewer"
 import Notifications from "./system/notifications"
+import Speech from "./speech"
 import PluginManager from "./system/plugins"
 import WhichKey from "./system/which-key"
 
@@ -29,6 +30,7 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     SidebarFiles,
     SidebarFooter,
     Notifications,
+    Speech,
     PluginManager,
     WhichKey,
     DiffViewer,
