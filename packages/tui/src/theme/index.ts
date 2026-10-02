@@ -920,6 +920,19 @@ function getSyntaxRules(theme: Theme) {
         foreground: theme.textMuted,
       },
     },
+    {
+      scope: ["speech.sentence"],
+      style: {
+        background: theme.backgroundElement,
+      },
+    },
+    {
+      scope: ["speech.word"],
+      style: {
+        foreground: selectedForeground(theme, theme.primary),
+        background: theme.primary,
+      },
+    },
     // Additional common highlight groups
     {
       scope: ["string.special", "string.special.url"],
