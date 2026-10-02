@@ -822,6 +822,38 @@ it.instance("static loop consumes queued replies across turns", () =>
   }),
 )
 
+it.instance("a later turn titles a session whose first title attempt did not land", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    expect(Session.isDefaultTitle(session.title)).toBe(true)
+
+    for (const text of ["hello one", "hello two"]) {
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text }],
+      })
+    }
+    yield* llm.text("world")
+    yield* prompt.loop({ sessionID: session.id })
+
+    const title = yield* pollWithTimeout(
+      Effect.gen(function* () {
+        const current = yield* sessions.get(session.id)
+        return Session.isDefaultTitle(current.title) ? undefined : current.title
+      }),
+      "session was never titled",
+    )
+    expect(title).toBe("E2E Title")
+  }),
+)
+
 it.instance("loop continues when finish is tool-calls", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
