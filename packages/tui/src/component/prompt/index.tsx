@@ -138,7 +138,7 @@ function formatEditorContext(selection: EditorSelection) {
   return `<system-reminder>${ranges.join("\n")} This may or may not be relevant to the current task.</system-reminder>\n`
 }
 
-let stashed: { prompt: PromptInfo; cursor: number } | undefined
+const stashed = new Map<string, { prompt: PromptInfo; cursor: number }>()
 
 export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
@@ -613,8 +613,9 @@ export function Prompt(props: PromptProps) {
   }
 
   onMount(() => {
-    const saved = stashed
-    stashed = undefined
+    const key = props.sessionID ?? ""
+    const saved = stashed.get(key)
+    stashed.delete(key)
     if (store.prompt.input) return
     if (saved && saved.prompt.input) {
       input.setText(saved.prompt.input)
@@ -626,7 +627,7 @@ export function Prompt(props: PromptProps) {
 
   onCleanup(() => {
     if (store.prompt.input) {
-      stashed = { prompt: unwrap(store.prompt), cursor: input.cursorOffset }
+      stashed.set(props.sessionID ?? "", { prompt: unwrap(store.prompt), cursor: input.cursorOffset })
     }
     setInputTarget(undefined)
     props.ref?.(undefined)
