@@ -1172,3 +1172,104 @@ it.instance(
     }),
   { git: true },
 )
+
+const repliedEvents = Effect.gen(function* () {
+  const events = yield* EventV2Bridge.Service
+  const seen: { requestID: PermissionV1.ID; reply: PermissionV1.Reply }[] = []
+  const unsub = yield* events.listen((event) => {
+    if (event.type === Permission.Event.Replied.type) {
+      const data = event.data as { requestID: PermissionV1.ID; reply: PermissionV1.Reply }
+      seen.push({ requestID: data.requestID, reply: data.reply })
+    }
+    return Effect.void
+  })
+  yield* Effect.addFinalizer(() => unsub)
+  return seen
+})
+
+const askInput = (id: string) => ({
+  id: PermissionV1.ID.make(id),
+  sessionID: SessionID.make("session_abort"),
+  permission: "bash",
+  patterns: ["ls"],
+  metadata: {},
+  always: [],
+  ruleset: [],
+})
+
+it.instance(
+  "ask - abort signal withdraws the pending request",
+  () =>
+    Effect.gen(function* () {
+      const seen = yield* repliedEvents
+      const controller = new AbortController()
+      const fiber = yield* Permission.Service.use((permission) =>
+        permission.ask(askInput("per_abort"), controller.signal),
+      ).pipe(Effect.forkScoped)
+
+      yield* waitForPending(1)
+      controller.abort()
+
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(PermissionV1.RejectedError)
+      expect(yield* list()).toHaveLength(0)
+      expect(seen).toEqual([{ requestID: PermissionV1.ID.make("per_abort"), reply: "reject" }])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - already aborted signal withdraws the request it just made",
+  () =>
+    Effect.gen(function* () {
+      const seen = yield* repliedEvents
+      const controller = new AbortController()
+      controller.abort()
+
+      const err = yield* fail(
+        Permission.Service.use((permission) => permission.ask(askInput("per_preaborted"), controller.signal)),
+      )
+
+      expect(err).toBeInstanceOf(PermissionV1.RejectedError)
+      expect(yield* list()).toHaveLength(0)
+      expect(seen).toEqual([{ requestID: PermissionV1.ID.make("per_preaborted"), reply: "reject" }])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - interrupting the caller withdraws the pending request",
+  () =>
+    Effect.gen(function* () {
+      const seen = yield* repliedEvents
+      const fiber = yield* ask(askInput("per_interrupt")).pipe(Effect.forkScoped)
+
+      yield* waitForPending(1)
+      yield* Fiber.interrupt(fiber)
+
+      expect(yield* list()).toHaveLength(0)
+      expect(seen).toEqual([{ requestID: PermissionV1.ID.make("per_interrupt"), reply: "reject" }])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - a request answered before abort is not withdrawn again",
+  () =>
+    Effect.gen(function* () {
+      const seen = yield* repliedEvents
+      const controller = new AbortController()
+      const fiber = yield* Permission.Service.use((permission) =>
+        permission.ask(askInput("per_answered"), controller.signal),
+      ).pipe(Effect.forkScoped)
+
+      yield* waitForPending(1)
+      yield* reply({ requestID: PermissionV1.ID.make("per_answered"), reply: "once" })
+      yield* Fiber.join(fiber)
+      controller.abort()
+
+      expect(seen).toEqual([{ requestID: PermissionV1.ID.make("per_answered"), reply: "once" }])
+    }),
+  { git: true },
+)

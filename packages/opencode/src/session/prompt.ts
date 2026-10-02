@@ -340,11 +340,14 @@ const layer = Layer.effect(
             }),
           ask: (req: any) =>
             permission
-              .ask({
-                ...req,
-                sessionID,
-                ruleset: Permission.merge(taskAgent.permission, session.permission ?? []),
-              })
+              .ask(
+                {
+                  ...req,
+                  sessionID,
+                  ruleset: Permission.merge(taskAgent.permission, session.permission ?? []),
+                },
+                taskAbort.signal,
+              )
               .pipe(Effect.orDie),
         })
         .pipe(

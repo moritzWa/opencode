@@ -233,6 +233,68 @@ it.instance(
   { git: true },
 )
 
+const rejectedEvents = Effect.gen(function* () {
+  const events = yield* EventV2Bridge.Service
+  const seen: QuestionID[] = []
+  const off = yield* events.listen((event) => {
+    if (event.type === Question.Event.Rejected.type) seen.push((event.data as { requestID: QuestionID }).requestID)
+    return Effect.void
+  })
+  yield* Effect.addFinalizer(() => off)
+  return seen
+})
+
+const singleQuestion = [
+  {
+    question: "What would you like to do?",
+    header: "Action",
+    options: [
+      { label: "Option 1", description: "First option" },
+      { label: "Option 2", description: "Second option" },
+    ],
+  },
+]
+
+it.instance(
+  "ask - abort signal withdraws the pending question",
+  () =>
+    Effect.gen(function* () {
+      const seen = yield* rejectedEvents
+      const controller = new AbortController()
+      const fiber = yield* Question.Service.use((question) =>
+        question.ask({ sessionID: SessionID.make("ses_test"), questions: singleQuestion }, controller.signal),
+      ).pipe(Effect.forkScoped)
+
+      const pending = yield* waitForPending(1)
+      controller.abort()
+
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Question.RejectedError)
+      expect(yield* listEffect).toHaveLength(0)
+      expect(seen).toEqual([pending[0].id])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - interrupting the caller withdraws the pending question",
+  () =>
+    Effect.gen(function* () {
+      const seen = yield* rejectedEvents
+      const fiber = yield* askEffect({ sessionID: SessionID.make("ses_test"), questions: singleQuestion }).pipe(
+        Effect.forkScoped,
+      )
+
+      const pending = yield* waitForPending(1)
+      yield* Fiber.interrupt(fiber)
+
+      expect(yield* listEffect).toHaveLength(0)
+      expect(seen).toEqual([pending[0].id])
+    }),
+  { git: true },
+)
+
 it.instance(
   "reject - removes from pending list",
   () =>
