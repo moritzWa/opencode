@@ -305,6 +305,7 @@ export function Session() {
         navigate({ type: "home" })
         return
       }
+      sync.session.add(result.data)
 
       if (result.data.workspaceID !== previousWorkspace) {
         project.workspace.set(result.data.workspaceID)
