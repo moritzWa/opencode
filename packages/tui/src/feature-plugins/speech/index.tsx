@@ -5,7 +5,7 @@ import { createSignal, Show } from "solid-js"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { build, source, wordAt, type Script } from "./script"
 import { load, play, type Clip, type Playback } from "./player"
-import { blocks, clear, show } from "./view"
+import { blocks, clear, onPick, show, type Spot } from "./view"
 
 const id = "internal:speech"
 
@@ -52,10 +52,10 @@ const tui: TuiPlugin = async (api) => {
   // A second press while the first one is still waiting on ElevenLabs or ffmpeg
   // would otherwise start a second playback on top of it.
   let busy = false
-  async function toggle() {
+  async function exclusive(run: () => Promise<unknown>) {
     if (busy) return
     busy = true
-    await step().finally(() => (busy = false))
+    await run().finally(() => (busy = false))
   }
 
   async function step() {
@@ -66,7 +66,21 @@ const tui: TuiPlugin = async (api) => {
     await open(answer)
   }
 
-  async function open(answer: { sessionID: string; messageID: string; partIDs: string[] }) {
+  async function jump(pick: Spot) {
+    const reading = current
+    if (!reading?.segments.some((segment) => segment.partID === pick.partID)) {
+      const answer = answerAt(api, pick)
+      return answer && open(answer, pick)
+    }
+    const from = await timeAt(reading, pick)
+    if (from === undefined || current !== reading) return
+    halt(reading)
+    reading.word = -1
+    reading.position = from
+    await start(from)
+  }
+
+  async function open(answer: { sessionID: string; messageID: string; partIDs: string[] }, pick?: Spot) {
     stop()
     const segments = answer.partIDs.flatMap((partID) =>
       (blocks(partID) ?? []).map((node, index) => ({ partID, index, node })),
@@ -86,7 +100,9 @@ const tui: TuiPlugin = async (api) => {
       position: 0,
       word: -1,
     }
-    await start(0)
+    const reading = current
+    const from = pick ? await timeAt(reading, pick) : 0
+    if (current === reading) await start(from ?? 0)
   }
 
   async function start(from: number) {
@@ -158,7 +174,7 @@ const tui: TuiPlugin = async (api) => {
         namespace: "palette",
         suggested: true,
         run() {
-          void toggle()
+          void exclusive(step)
           return true
         },
       },
@@ -220,7 +236,7 @@ const tui: TuiPlugin = async (api) => {
                 api={api}
                 status={status()}
                 rate={rate()}
-                onToggle={() => void toggle()}
+                onToggle={() => void exclusive(step)}
                 onSpeed={(delta) => void speed(delta)}
                 onStop={stop}
               />
@@ -231,7 +247,11 @@ const tui: TuiPlugin = async (api) => {
     },
   })
 
-  api.lifecycle.onDispose(stop)
+  const unpick = onPick((pick) => void exclusive(() => jump(pick)))
+  api.lifecycle.onDispose(() => {
+    unpick()
+    stop()
+  })
 }
 
 function Controls(props: {
@@ -271,20 +291,62 @@ export function finalAnswer(messages: readonly Message[], parts: (messageID: str
   return messages
     .toReversed()
     .filter((message) => message.role === "assistant")
-    .map((message) => {
-      const all = parts(message.id)
-      const tail = all.slice(all.findLastIndex((part) => part.type === "tool") + 1)
-      return { messageID: message.id, partIDs: tail.filter(isAnswerText).map((part) => part.id) }
-    })
+    .map((message) => ({ messageID: message.id, partIDs: answerParts(parts(message.id)) }))
     .find((answer) => answer.partIDs.length > 0)
 }
 
-function currentAnswer(api: TuiPluginApi) {
+function answerParts(parts: readonly Part[]) {
+  return parts
+    .slice(parts.findLastIndex((part) => part.type === "tool") + 1)
+    .filter(isAnswerText)
+    .map((part) => part.id)
+}
+
+function routeSession(api: TuiPluginApi) {
   const route = api.route.current
   if (route.name !== "session" || !route.params || typeof route.params.sessionID !== "string") return
-  const sessionID = route.params.sessionID
+  return route.params.sessionID
+}
+
+function currentAnswer(api: TuiPluginApi) {
+  const sessionID = routeSession(api)
+  if (!sessionID) return
   const answer = finalAnswer(api.state.session.messages(sessionID), api.state.part)
   return answer && { sessionID, ...answer }
+}
+
+/**
+ * What to read when a word is clicked: the clicked message's answer when the word
+ * is in it, so the cached audio is reused, otherwise its text from that part on.
+ */
+function answerAt(api: TuiPluginApi, pick: Spot) {
+  const sessionID = routeSession(api)
+  if (!sessionID) return
+  const parts = api.state.part(pick.messageID)
+  const answer = answerParts(parts)
+  const partIDs = answer.includes(pick.partID)
+    ? answer
+    : parts
+        .slice(parts.findIndex((part) => part.id === pick.partID))
+        .filter(isAnswerText)
+        .map((part) => part.id)
+  return { sessionID, messageID: pick.messageID, partIDs }
+}
+
+/** Start time of the first spoken word at or after the picked spot, waiting for it to stream in. */
+async function timeAt(reading: Reading, pick: Spot) {
+  const segment = reading.segments.findIndex(
+    (segment) => segment.partID === pick.partID && resolve(segment) === pick.node,
+  )
+  if (segment < 0) return
+  const { script, clip } = reading
+  const char = script.segment.findIndex(
+    (seg, index) => seg > segment || (seg === segment && script.offset[index] >= pick.offset),
+  )
+  const word = script.words.find((word) => word.end > char)
+  if (char < 0 || !word) return
+  while (clip.starts[word.start] === undefined && !clip.done) await clip.next()
+  return clip.starts[word.start]
 }
 
 function isAnswerText(part: Part): part is TextPart {

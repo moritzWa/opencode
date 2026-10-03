@@ -4,7 +4,7 @@ import type { MarkdownRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { DEFAULT_THEMES, generateSyntax, resolveTheme, tint } from "../../src/theme"
 import { build, source } from "../../src/feature-plugins/speech/script"
-import { blocks, clear, register, show } from "../../src/feature-plugins/speech/view"
+import { blocks, clear, offsetAt, register, show } from "../../src/feature-plugins/speech/view"
 
 const content = `## Summary
 
@@ -87,6 +87,48 @@ test("highlights the current sentence and word inside rendered markdown", async 
 
     clear()
     expect(await settle(() => !painted(wordColor).includes("tests"))).toBe(true)
+  } finally {
+    await Bun.sleep(50)
+    setup.renderer.destroy()
+  }
+}, 20000)
+
+test("maps a clicked cell to its offset in the block's raw markdown", async () => {
+  const theme = resolveTheme(DEFAULT_THEMES.opencode, "dark")
+  let view: MarkdownRenderable | undefined
+  const setup = await testRender(
+    () => (
+      <markdown
+        ref={(el: MarkdownRenderable) => (view = el)}
+        syntaxStyle={generateSyntax(theme)}
+        internalBlockMode="top-level"
+        conceal={true}
+        content={
+          "I found the **likely bug** in `router.ts` and a [link](https://x.com/a) there. There are no tests\nfor it at all, which is a shame.\n\n- first **item** here"
+        }
+      />
+    ),
+    { width: 40, height: 12 },
+  )
+  try {
+    for (let i = 0; i < 30 && !setup.captureCharFrame().includes("shame"); i++) {
+      await Bun.sleep(16)
+      await setup.renderOnce()
+    }
+    register("click", view!)
+    const frame = setup.captureCharFrame().split("\n")
+    const at = (word: string) => {
+      const y = frame.findIndex((row) => new RegExp(`\\b${word}\\b`).test(row))
+      const x = frame[y].search(new RegExp(`\\b${word}\\b`)) + 1
+      const node = blocks("click")!.find((node) => y >= node.y && y < node.y + node.height)!
+      const offset = offsetAt(node, x, y)!
+      return node.content.slice(offset, offset + word.length - 1)
+    }
+    expect(at("likely")).toBe("ikely")
+    expect(at("router")).toBe("outer")
+    expect(at("there")).toBe("here")
+    expect(at("shame")).toBe("hame")
+    expect(at("item")).toBe("tem")
   } finally {
     await Bun.sleep(50)
     setup.renderer.destroy()

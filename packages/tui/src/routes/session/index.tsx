@@ -1713,6 +1713,7 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
             SpeechView.register(props.part.id, el)
             onCleanup(() => SpeechView.unregister(props.part.id, el))
           }}
+          onMouseUp={(event) => SpeechView.click(props.part.id, props.message.id, event)}
           syntaxStyle={syntax()}
           streaming={true}
           internalBlockMode="top-level"
