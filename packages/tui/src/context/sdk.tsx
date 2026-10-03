@@ -19,12 +19,13 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
   }) => {
     const abort = new AbortController()
     let sse: AbortController | undefined
+    let directory = props.directory
 
     function createSDK() {
       return createOpencodeClient({
         baseUrl: props.url,
         signal: abort.signal,
-        directory: props.directory,
+        directory,
         fetch: props.fetch,
         headers: props.headers,
       })
@@ -142,7 +143,15 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       get client() {
         return sdk
       },
-      directory: props.directory,
+      get directory() {
+        return directory
+      },
+      /** Point requests at another directory. The event stream is global, so it keeps running. */
+      setDirectory(next: string) {
+        if (next === directory) return
+        directory = next
+        sdk = createSDK()
+      },
       event: emitter,
       fetch: props.fetch ?? fetch,
       url: props.url,

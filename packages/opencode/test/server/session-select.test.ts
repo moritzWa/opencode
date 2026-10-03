@@ -46,11 +46,11 @@ describe("tui.selectSession endpoint", () => {
         const response = yield* requestInDirectory("/tui/select-session", tmp.directory, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionID: session.id, client: "pane-2" }),
+          body: JSON.stringify({ sessionID: session.id, client: "pane-2", targetDirectory: tmp.directory }),
         })
 
         expect(response.status).toBe(200)
-        expect(seen).toEqual([{ sessionID: session.id, client: "pane-2" }])
+        expect(seen).toEqual([{ sessionID: session.id, client: "pane-2", targetDirectory: tmp.directory }])
       }),
     { git: true },
   )
