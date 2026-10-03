@@ -266,17 +266,17 @@ function Controls(props: {
   return (
     <box flexDirection="row" gap={1}>
       <text fg={theme().accent} onMouseUp={props.onToggle}>
-        {props.status === "playing" ? "‖ pause" : props.status === "loading" ? "… loading" : "▸ play"}
+        {props.status === "playing" ? "pause" : props.status === "loading" ? "loading..." : "play"}
       </text>
       <text fg={theme().textMuted} onMouseUp={() => props.onSpeed(-STEP)}>
-        −
+        -
       </text>
       <text fg={theme().text}>{props.rate.toFixed(2).replace(/0$/, "")}x</text>
       <text fg={theme().textMuted} onMouseUp={() => props.onSpeed(STEP)}>
         +
       </text>
       <text fg={theme().textMuted} onMouseUp={props.onStop}>
-        ■
+        stop
       </text>
     </box>
   )
