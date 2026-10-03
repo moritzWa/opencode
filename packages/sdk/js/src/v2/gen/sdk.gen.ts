@@ -4989,6 +4989,7 @@ export class Tui extends HeyApiClient {
       workspace?: string
       sessionID?: string
       client?: string
+      targetDirectory?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -5001,6 +5002,7 @@ export class Tui extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "body", key: "sessionID" },
             { in: "body", key: "client" },
+            { in: "body", key: "targetDirectory" },
           ],
         },
       ],

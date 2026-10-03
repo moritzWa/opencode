@@ -1453,6 +1453,10 @@ export type GlobalEvent = {
            * Only the TUI started with this --client id navigates. Omit to navigate every attached TUI.
            */
           client?: string
+          /**
+           * Directory to move the TUI to before showing the session, reloading its agents, commands, and file search. Omit to keep the TUI's directory.
+           */
+          targetDirectory?: string
         }
       }
     | {
@@ -2660,6 +2664,10 @@ export type EventTuiSessionSelect = {
      * Only the TUI started with this --client id navigates. Omit to navigate every attached TUI.
      */
     client?: string
+    /**
+     * Directory to move the TUI to before showing the session, reloading its agents, commands, and file search. Omit to keep the TUI's directory.
+     */
+    targetDirectory?: string
   }
 }
 
@@ -3028,6 +3036,10 @@ export type EventTuiSessionSelect2 = {
      * Only the TUI started with this --client id navigates. Omit to navigate every attached TUI.
      */
     client?: string
+    /**
+     * Directory to move the TUI to before showing the session, reloading its agents, commands, and file search. Omit to keep the TUI's directory.
+     */
+    targetDirectory?: string
   }
 }
 
@@ -5847,6 +5859,10 @@ export type TuiSessionSelect = {
      * Only the TUI started with this --client id navigates. Omit to navigate every attached TUI.
      */
     client?: string
+    /**
+     * Directory to move the TUI to before showing the session, reloading its agents, commands, and file search. Omit to keep the TUI's directory.
+     */
+    targetDirectory?: string
   }
 }
 
@@ -10933,6 +10949,10 @@ export type TuiSelectSessionData = {
      * Only the TUI started with this --client id navigates. Omit to navigate every attached TUI.
      */
     client?: string
+    /**
+     * Directory to move the TUI to before showing the session, reloading its agents, commands, and file search. Omit to keep the TUI's directory.
+     */
+    targetDirectory?: string
   }
   path?: never
   query?: {

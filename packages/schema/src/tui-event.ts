@@ -58,6 +58,12 @@ export const SessionSelect = Event.define({
         description: "Only the TUI started with this --client id navigates. Omit to navigate every attached TUI.",
       }),
     ),
+    targetDirectory: optional(
+      Schema.String.annotate({
+        description:
+          "Directory to move the TUI to before showing the session, reloading its agents, commands, and file search. Omit to keep the TUI's directory.",
+      }),
+    ),
   },
 })
 

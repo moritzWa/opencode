@@ -35,7 +35,7 @@ import { useEvent } from "./context/event"
 import { SDKProvider, useSDK } from "./context/sdk"
 import { StartupLoading } from "./component/startup-loading"
 import { SyncProvider, useSync } from "./context/sync"
-import { DataProvider } from "./context/data"
+import { DataProvider, useData } from "./context/data"
 import { LocationProvider } from "./context/location"
 import { LocalProvider, useLocal } from "./context/local"
 import { PermissionProvider } from "./context/permission"
@@ -380,6 +380,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   const themeState = useTheme()
   const { theme, mode, setMode, locked, lock, unlock } = themeState
   const sync = useSync()
+  const data = useData()
   const project = useProject()
   const exit = useExit()
   const promptRef = usePromptRef()
@@ -1002,6 +1003,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   event.on("tui.session.select", (evt, { workspace }) => {
     if (workspace !== project.workspace.current()) return
     if (evt.properties.client !== undefined && evt.properties.client !== args.client) return
+    const directory = evt.properties.targetDirectory
+    if (directory && directory !== sdk.directory) {
+      sdk.setDirectory(directory)
+      void sync.bootstrap({ fatal: false }).catch(() => {})
+      void data.refreshDefaultLocation()
+    }
     route.navigate({
       type: "session",
       sessionID: evt.properties.sessionID,
