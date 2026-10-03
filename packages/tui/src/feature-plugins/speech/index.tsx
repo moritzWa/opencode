@@ -77,7 +77,15 @@ const tui: TuiPlugin = async (api) => {
     setStatus("loading")
     const clip = await load(script.text).catch(fail)
     if (!clip) return setStatus("idle")
-    current = { sessionID: answer.sessionID, messageID: answer.messageID, segments, script, clip, position: 0, word: -1 }
+    current = {
+      sessionID: answer.sessionID,
+      messageID: answer.messageID,
+      segments,
+      script,
+      clip,
+      position: 0,
+      word: -1,
+    }
     await start(0)
   }
 
@@ -201,17 +209,20 @@ const tui: TuiPlugin = async (api) => {
     order: 50,
     slots: {
       session_prompt_footer(_ctx, props) {
+        // A bare Show here would make the slot host re-run on every status change.
         return (
-          <Show when={status() !== "idle" && sessionID() === props.session_id}>
-            <Controls
-              api={api}
-              status={status()}
-              rate={rate()}
-              onToggle={() => void toggle()}
-              onSpeed={(delta) => void speed(delta)}
-              onStop={stop}
-            />
-          </Show>
+          <box>
+            <Show when={status() !== "idle" && sessionID() === props.session_id}>
+              <Controls
+                api={api}
+                status={status()}
+                rate={rate()}
+                onToggle={() => void toggle()}
+                onSpeed={(delta) => void speed(delta)}
+                onStop={stop}
+              />
+            </Show>
+          </box>
         )
       },
     },
