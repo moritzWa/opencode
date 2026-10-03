@@ -153,9 +153,10 @@ const tui: TuiPlugin = async (api) => {
     commands: [
       {
         name: command.toggle,
-        title: "Read answer aloud / pause",
+        title: "Read latest answer aloud / pause",
         category: "Speech",
         namespace: "palette",
+        suggested: true,
         run() {
           void toggle()
           return true
@@ -186,6 +187,7 @@ const tui: TuiPlugin = async (api) => {
         title: "Read aloud faster",
         category: "Speech",
         namespace: "palette",
+        suggested: () => status() !== "idle",
         run() {
           void speed(STEP)
           return true
@@ -196,6 +198,7 @@ const tui: TuiPlugin = async (api) => {
         title: "Read aloud slower",
         category: "Speech",
         namespace: "palette",
+        suggested: () => status() !== "idle",
         run() {
           void speed(-STEP)
           return true
