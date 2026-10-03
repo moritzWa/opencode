@@ -923,14 +923,13 @@ function getSyntaxRules(theme: Theme) {
     {
       scope: ["speech.sentence"],
       style: {
-        background: theme.backgroundElement,
+        background: tint(theme.background, theme.primary, 0.12),
       },
     },
     {
       scope: ["speech.word"],
       style: {
-        foreground: selectedForeground(theme, theme.primary),
-        background: theme.primary,
+        background: tint(theme.background, theme.primary, 0.4),
       },
     },
     // Additional common highlight groups

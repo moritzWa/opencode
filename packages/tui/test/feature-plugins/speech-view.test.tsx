@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test"
 import type { MarkdownRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
-import { DEFAULT_THEMES, generateSyntax, resolveTheme } from "../../src/theme"
+import { DEFAULT_THEMES, generateSyntax, resolveTheme, tint } from "../../src/theme"
 import { build, source } from "../../src/feature-plugins/speech/script"
 import { blocks, clear, register, show } from "../../src/feature-plugins/speech/view"
 
@@ -77,14 +77,16 @@ test("highlights the current sentence and word inside rendered markdown", async 
     )!
     const target = source(script, script.words[word])
     show(nodes[target.segment], source(script, sentence), target)
+    const wordColor = tint(theme.background, theme.primary, 0.4)
+    const sentenceColor = tint(theme.background, theme.primary, 0.12)
 
-    expect(await settle(() => painted(theme.primary).includes("tests"))).toBe(true)
-    expect(painted(theme.primary).trim()).toBe("tests")
-    expect(painted(theme.backgroundElement)).toContain("There are no")
-    expect(painted(theme.backgroundElement)).not.toContain("likely")
+    expect(await settle(() => painted(wordColor).includes("tests"))).toBe(true)
+    expect(painted(wordColor).trim()).toBe("tests")
+    expect(painted(sentenceColor)).toContain("There are no")
+    expect(painted(sentenceColor)).not.toContain("likely")
 
     clear()
-    expect(await settle(() => !painted(theme.primary).includes("tests"))).toBe(true)
+    expect(await settle(() => !painted(wordColor).includes("tests"))).toBe(true)
   } finally {
     await Bun.sleep(50)
     setup.renderer.destroy()
