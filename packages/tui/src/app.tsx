@@ -1000,19 +1000,33 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     })
   })
 
+  // The newest requested session, so a slow fetch cannot navigate over a later request.
+  let selecting: string | undefined
   event.on("tui.session.select", (evt, { workspace }) => {
     if (workspace !== project.workspace.current()) return
     if (evt.properties.client !== undefined && evt.properties.client !== args.client) return
+    const sessionID = evt.properties.sessionID
     const directory = evt.properties.targetDirectory
-    if (directory && directory !== sdk.directory) {
-      sdk.setDirectory(directory)
-      void sync.bootstrap({ fatal: false }).catch(() => {})
-      void data.refreshDefaultLocation()
+    selecting = sessionID
+    if (!directory || directory === sdk.directory) {
+      route.navigate({ type: "session", sessionID })
+      return
     }
-    route.navigate({
-      type: "session",
-      sessionID: evt.properties.sessionID,
-    })
+    sdk.setDirectory(directory)
+    // The new directory's session list arrives with its full reload, up to seconds later, and the
+    // session view is empty until it has the session. Fetch the session alone first, keeping the
+    // previous one on screen, and reload once it is shown so the fetch does not queue behind it.
+    void sdk.client.session
+      .get({ sessionID })
+      .then((x) => {
+        if (x.data) sync.session.add(x.data)
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (selecting === sessionID) route.navigate({ type: "session", sessionID })
+        void sync.bootstrap({ fatal: false }).catch(() => {})
+        void data.refreshDefaultLocation()
+      })
   })
 
   event.on("session.deleted", (evt) => {
