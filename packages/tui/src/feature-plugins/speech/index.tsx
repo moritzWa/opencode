@@ -1,6 +1,7 @@
 import type { Message, Part, TextPart } from "@opencode-ai/sdk/v2"
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { CodeRenderable } from "@opentui/core"
+import { createSignal, Show } from "solid-js"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { build, source, wordAt, type Script } from "./script"
 import { load, play, type Clip, type Playback } from "./player"
@@ -16,14 +17,19 @@ const command = {
   slower: "speech.slower",
 } as const
 
-const KV_RATE = "speech_rate"
+const KV_RATE = "speech_speed"
+const DEFAULT_RATE = 1.7
 const TICK_MS = 40
+const STEP = 0.1
 // Resuming a beat early makes the first word after a pause audible again.
 const RESUME_REWIND = 0.4
 
 type Segment = { partID: string; index: number; node: CodeRenderable }
 
+type Status = "idle" | "loading" | "playing" | "paused"
+
 type Reading = {
+  sessionID: string
   messageID: string
   segments: Segment[]
   script: Script
@@ -36,7 +42,9 @@ type Reading = {
 
 const tui: TuiPlugin = async (api) => {
   let current: Reading | undefined
-  let rate = clampRate(api.kv.get(KV_RATE, 1))
+  const [rate, setRate] = createSignal(clampRate(api.kv.get(KV_RATE, DEFAULT_RATE)))
+  const [status, setStatus] = createSignal<Status>("idle")
+  const [sessionID, setSessionID] = createSignal<string>()
 
   const fail = (error: unknown) =>
     api.ui.toast({ variant: "error", message: error instanceof Error ? error.message : String(error) })
@@ -58,25 +66,28 @@ const tui: TuiPlugin = async (api) => {
     await open(answer)
   }
 
-  async function open(answer: { messageID: string; partIDs: string[] }) {
+  async function open(answer: { sessionID: string; messageID: string; partIDs: string[] }) {
     stop()
     const segments = answer.partIDs.flatMap((partID) =>
       (blocks(partID) ?? []).map((node, index) => ({ partID, index, node })),
     )
     const script = build(segments.map((segment) => segment.node.content))
     if (!script.text) return api.ui.toast({ variant: "info", message: "Nothing to read in this answer" })
+    setSessionID(answer.sessionID)
+    setStatus("loading")
     const clip = await load(script.text).catch(fail)
-    if (!clip) return
-    current = { messageID: answer.messageID, segments, script, clip, position: 0, word: -1 }
+    if (!clip) return setStatus("idle")
+    current = { sessionID: answer.sessionID, messageID: answer.messageID, segments, script, clip, position: 0, word: -1 }
     await start(0)
   }
 
   async function start(from: number) {
     const reading = current
     if (!reading) return
-    const playback = await play(reading.clip, Math.max(0, from), rate).catch(fail)
+    const playback = await play(reading.clip, Math.max(0, from), rate()).catch(fail)
     if (!playback || current !== reading) return playback?.stop()
     reading.playback = playback
+    setStatus("playing")
     reading.timer = setInterval(() => tick(reading), TICK_MS)
     void playback.ended.then(() => {
       if (reading.playback !== playback) return
@@ -90,12 +101,14 @@ const tui: TuiPlugin = async (api) => {
     if (!reading?.playback) return
     reading.position = reading.playback.position()
     halt(reading)
+    setStatus("paused")
   }
 
   function stop() {
     if (current) halt(current)
     current = undefined
     clear()
+    setStatus("idle")
   }
 
   async function restart() {
@@ -105,9 +118,8 @@ const tui: TuiPlugin = async (api) => {
   }
 
   async function speed(delta: number) {
-    rate = clampRate(rate + delta)
-    api.kv.set(KV_RATE, rate)
-    api.ui.toast({ variant: "info", message: `Reading speed ${rate}x`, duration: 1200 })
+    setRate(clampRate(rate() + delta))
+    api.kv.set(KV_RATE, rate())
     const reading = current
     if (!reading?.playback) return
     reading.position = reading.playback.position()
@@ -167,7 +179,7 @@ const tui: TuiPlugin = async (api) => {
         category: "Speech",
         namespace: "palette",
         run() {
-          void speed(0.25)
+          void speed(STEP)
           return true
         },
       },
@@ -177,7 +189,7 @@ const tui: TuiPlugin = async (api) => {
         category: "Speech",
         namespace: "palette",
         run() {
-          void speed(-0.25)
+          void speed(-STEP)
           return true
         },
       },
@@ -185,7 +197,55 @@ const tui: TuiPlugin = async (api) => {
     bindings: api.tuiConfig.keybinds.gather("speech", Object.values(command)),
   })
 
+  api.slots.register({
+    order: 50,
+    slots: {
+      session_prompt_footer(_ctx, props) {
+        return (
+          <Show when={status() !== "idle" && sessionID() === props.session_id}>
+            <Controls
+              api={api}
+              status={status()}
+              rate={rate()}
+              onToggle={() => void toggle()}
+              onSpeed={(delta) => void speed(delta)}
+              onStop={stop}
+            />
+          </Show>
+        )
+      },
+    },
+  })
+
   api.lifecycle.onDispose(stop)
+}
+
+function Controls(props: {
+  api: TuiPluginApi
+  status: Status
+  rate: number
+  onToggle: () => void
+  onSpeed: (delta: number) => void
+  onStop: () => void
+}) {
+  const theme = () => props.api.theme.current
+  return (
+    <box flexDirection="row" gap={1}>
+      <text fg={theme().accent} onMouseUp={props.onToggle}>
+        {props.status === "playing" ? "‖ pause" : props.status === "loading" ? "… loading" : "▸ play"}
+      </text>
+      <text fg={theme().textMuted} onMouseUp={() => props.onSpeed(-STEP)}>
+        −
+      </text>
+      <text fg={theme().text}>{props.rate.toFixed(2).replace(/0$/, "")}x</text>
+      <text fg={theme().textMuted} onMouseUp={() => props.onSpeed(STEP)}>
+        +
+      </text>
+      <text fg={theme().textMuted} onMouseUp={props.onStop}>
+        ■
+      </text>
+    </box>
+  )
 }
 
 /**
@@ -208,7 +268,9 @@ export function finalAnswer(messages: readonly Message[], parts: (messageID: str
 function currentAnswer(api: TuiPluginApi) {
   const route = api.route.current
   if (route.name !== "session" || !route.params || typeof route.params.sessionID !== "string") return
-  return finalAnswer(api.state.session.messages(route.params.sessionID), api.state.part)
+  const sessionID = route.params.sessionID
+  const answer = finalAnswer(api.state.session.messages(sessionID), api.state.part)
+  return answer && { sessionID, ...answer }
 }
 
 function isAnswerText(part: Part): part is TextPart {
@@ -233,7 +295,7 @@ function halt(reading: Reading) {
 }
 
 function clampRate(value: unknown) {
-  const rate = typeof value === "number" && Number.isFinite(value) ? value : 1
+  const rate = typeof value === "number" && Number.isFinite(value) ? value : DEFAULT_RATE
   return Math.round(Math.min(3, Math.max(0.5, rate)) * 100) / 100
 }
 
