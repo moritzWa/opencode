@@ -29,7 +29,24 @@ export const RETRY_BACKOFF_FACTOR = 2
 export const RETRY_JITTER_FACTOR = 0.25
 export const RETRY_MAX_DELAY_NO_HEADERS = 30_000 // 30 seconds
 export const RETRY_MAX_DELAY = 2_147_483_647 // max 32-bit signed integer for setTimeout
-export const RETRY_MAX_RETRIES = 5
+export const RETRY_MAX_RETRIES = 10
+
+const TRANSIENT_NETWORK_CODES = new Set([
+  "EAI_AGAIN",
+  "ECONNABORTED",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETDOWN",
+  "ENETRESET",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+  "ETIMEDOUT",
+  "ERR_HTTP2_GOAWAY_SESSION",
+  "ERR_HTTP2_SESSION_ERROR",
+  "ERR_HTTP2_STREAM_ERROR",
+])
 
 const RETRYABLE_MESSAGE_PATTERNS = [
   /429|500|502|503|504|524/i,
@@ -88,8 +105,7 @@ export function fromError(error: unknown, ctx: Parameters<typeof MessageV2.fromE
   if (
     error instanceof Error &&
     !APICallError.isInstance(error) &&
-    "isRetryable" in error &&
-    error.isRetryable === true
+    (("isRetryable" in error && error.isRetryable === true) || transientNetworkError(error))
   ) {
     const headers = "responseHeaders" in error && isRecord(error.responseHeaders) ? error.responseHeaders : undefined
     return new SessionV1.APIError(
@@ -106,6 +122,19 @@ export function fromError(error: unknown, ctx: Parameters<typeof MessageV2.fromE
     ).toObject()
   }
   return MessageV2.fromError(error, ctx)
+}
+
+// Providers that already spent their own retry budget mark the error
+// `isRetryable: false` or `transient: false` while keeping the network code.
+function transientNetworkError(error: Error) {
+  if ("isRetryable" in error && error.isRetryable === false) return false
+  if ("transient" in error && error.transient === false) return false
+  let current: unknown = error
+  for (let depth = 0; depth < 5 && isRecord(current); depth++) {
+    if (typeof current.code === "string" && TRANSIENT_NETWORK_CODES.has(current.code)) return true
+    current = current.cause
+  }
+  return false
 }
 
 export function retryable(error: Err, provider: string) {
