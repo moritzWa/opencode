@@ -30,7 +30,6 @@ import {
   addDefaultParsers,
   TextAttributes,
   RGBA,
-  type MarkdownRenderable,
 } from "@opentui/core"
 import { Prompt, type PromptRef } from "../../component/prompt"
 import type {
@@ -65,7 +64,6 @@ import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
 import { Toast, useToast } from "../../ui/toast"
-import { SpeechView } from "../../feature-plugins/speech/view"
 import { useKV } from "../../context/kv.tsx"
 import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
@@ -1163,16 +1161,6 @@ export function Session() {
   // snap to bottom when session changes
   createEffect(on(() => route.sessionID, toBottom))
 
-  // keep the block being read aloud on screen
-  createEffect(
-    on(SpeechView.reading, (node) => {
-      if (!node || node.isDestroyed || !scroll || scroll.isDestroyed) return
-      const top = node.y - scroll.y
-      if (top >= 0 && top + Math.min(node.height, scroll.height) <= scroll.height) return
-      scroll.scrollBy(top - 1)
-    }),
-  )
-
   return (
     <LocationProvider location={location()}>
       <context.Provider
@@ -1710,11 +1698,6 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
     <Show when={props.part.text.trim()}>
       <box ref={(el: BoxRenderable) => alwaysSeparate.add(el)} paddingLeft={3} marginTop={1} flexShrink={0}>
         <markdown
-          ref={(el: MarkdownRenderable) => {
-            SpeechView.register(props.part.id, el)
-            onCleanup(() => SpeechView.unregister(props.part.id, el))
-          }}
-          onMouseUp={(event) => SpeechView.click(props.part.id, props.message.id, event)}
           syntaxStyle={syntax()}
           streaming={true}
           internalBlockMode="top-level"

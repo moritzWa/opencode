@@ -237,12 +237,6 @@ export const Definitions = {
   which_key_page_down: keybind("ctrl+alt+pagedown", "Page which-key down"),
   which_key_home: keybind("ctrl+alt+home", "Jump to first which-key binding"),
   which_key_end: keybind("ctrl+alt+end", "Jump to last which-key binding"),
-
-  speech_toggle: keybind("ctrl+s", "Read the last answer aloud, or pause and resume"),
-  speech_stop: keybind("none", "Stop reading aloud"),
-  speech_restart: keybind("none", "Read the last answer from the start"),
-  speech_faster: keybind("none", "Read aloud faster"),
-  speech_slower: keybind("none", "Read aloud slower"),
 } satisfies Record<string, Definition>
 
 type KeybindName = keyof typeof Definitions
@@ -423,11 +417,6 @@ export const CommandMap = {
   which_key_page_down: "which-key.page.down",
   which_key_home: "which-key.home",
   which_key_end: "which-key.end",
-  speech_toggle: "speech.toggle",
-  speech_stop: "speech.stop",
-  speech_restart: "speech.restart",
-  speech_faster: "speech.faster",
-  speech_slower: "speech.slower",
 } satisfies BindingCommandMap
 const CommandDescriptions = Object.fromEntries(
   Object.entries(Definitions).map(([name, item]) => [
