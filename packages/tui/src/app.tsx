@@ -1011,38 +1011,25 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     const directory = evt.properties.targetDirectory
     selecting = sessionID
     const started = performance.now()
-    if (!directory || directory === sdk.directory) {
-      route.navigate({ type: "session", sessionID })
-      perf("tui.select", { sessionID, crossDirectory: false, navigateMs: Math.round(performance.now() - started) })
-      return
-    }
-    sdk.setDirectory(directory)
-    // The new directory's session list arrives with its full reload, up to seconds later, and the
-    // session view is empty until it has the session. Fetch the session alone first, keeping the
-    // previous one on screen, and reload once its messages are in so neither fetch queues behind it.
-    void sdk.client.session
-      .get({ sessionID })
-      .then((x) => {
-        if (x.data) sync.session.add(x.data)
-      })
+    const crossDirectory = !!directory && directory !== sdk.directory
+    if (directory && crossDirectory) sdk.setDirectory(directory)
+    // Keep the previous session on screen until this one and its messages are loaded, so the switch
+    // never shows an empty session, and the terminal title changes only once the new one is drawn:
+    // agentview waits for that title before it brings a TUI it switched in the background forward.
+    void sync.session
+      .sync(sessionID)
       .catch(() => {})
       .finally(() => {
-        const fetchedMs = Math.round(performance.now() - started)
         if (selecting === sessionID) route.navigate({ type: "session", sessionID })
-        const navigatedMs = Math.round(performance.now() - started)
-        perf("tui.select", { sessionID, crossDirectory: true, sessionGetMs: fetchedMs, navigateMs: navigatedMs })
-        // The reload's provider catalog is several MB, so its requests delay the messages queued
-        // behind them by about a second and parsing it blocks the event loop. Load the messages first.
-        void sync.session
-          .sync(sessionID)
-          .catch(() => {})
-          .finally(() => {
-            void sync.bootstrap({ fatal: false }).catch(() => {})
-            const location = performance.now()
-            void data.refreshDefaultLocation().finally(() =>
-              perf("tui.refresh_default_location", { ms: Math.round(performance.now() - location) }),
-            )
-          })
+        perf("tui.select", { sessionID, crossDirectory, navigateMs: Math.round(performance.now() - started) })
+        if (!crossDirectory) return
+        // The new directory's reload fetches a provider catalog of several MB; started any earlier,
+        // it delays the messages queued behind it by about a second.
+        void sync.bootstrap({ fatal: false }).catch(() => {})
+        const location = performance.now()
+        void data.refreshDefaultLocation().finally(() =>
+          perf("tui.refresh_default_location", { ms: Math.round(performance.now() - location) }),
+        )
       })
   })
 
