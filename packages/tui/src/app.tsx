@@ -1019,7 +1019,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     sdk.setDirectory(directory)
     // The new directory's session list arrives with its full reload, up to seconds later, and the
     // session view is empty until it has the session. Fetch the session alone first, keeping the
-    // previous one on screen, and reload once it is shown so the fetch does not queue behind it.
+    // previous one on screen, and reload once its messages are in so neither fetch queues behind it.
     void sdk.client.session
       .get({ sessionID })
       .then((x) => {
@@ -1031,11 +1031,18 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         if (selecting === sessionID) route.navigate({ type: "session", sessionID })
         const navigatedMs = Math.round(performance.now() - started)
         perf("tui.select", { sessionID, crossDirectory: true, sessionGetMs: fetchedMs, navigateMs: navigatedMs })
-        void sync.bootstrap({ fatal: false }).catch(() => {})
-        const location = performance.now()
-        void data.refreshDefaultLocation().finally(() =>
-          perf("tui.refresh_default_location", { ms: Math.round(performance.now() - location) }),
-        )
+        // The reload's provider catalog is several MB, so its requests delay the messages queued
+        // behind them by about a second and parsing it blocks the event loop. Load the messages first.
+        void sync.session
+          .sync(sessionID)
+          .catch(() => {})
+          .finally(() => {
+            void sync.bootstrap({ fatal: false }).catch(() => {})
+            const location = performance.now()
+            void data.refreshDefaultLocation().finally(() =>
+              perf("tui.refresh_default_location", { ms: Math.round(performance.now() - location) }),
+            )
+          })
       })
   })
 
