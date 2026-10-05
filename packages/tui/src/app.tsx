@@ -90,6 +90,9 @@ import { cliErrorMessage, errorFormat } from "./util/error"
 
 registerOpencodeSpinner()
 
+/** How long switching must pause before a TUI moved to another directory reloads its data. */
+const DIRECTORY_RELOAD_DELAY_MS = 800
+
 const appGlobalBindingCommands = [
   "session.list",
   "session.new",
@@ -1012,26 +1015,57 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     selecting = sessionID
     const started = performance.now()
     const crossDirectory = !!directory && directory !== sdk.directory
-    if (directory && crossDirectory) sdk.setDirectory(directory)
-    // Keep the previous session on screen until this one and its messages are loaded, so the switch
-    // never shows an empty session, and the terminal title changes only once the new one is drawn:
-    // agentview waits for that title before it brings a TUI it switched in the background forward.
+    if (directory && crossDirectory) {
+      sdk.setDirectory(directory)
+      reloadPending = true
+    }
+    // Keep the previous session on screen until this one and its latest messages are loaded, so the
+    // switch never shows an empty session, and the terminal title changes only once the new one is
+    // drawn: agentview waits for that title before it brings a TUI it switched in the background forward.
     void sync.session
-      .sync(sessionID)
+      .sync(sessionID, { firstPage: true })
       .catch(() => {})
       .finally(() => {
         if (selecting === sessionID) route.navigate({ type: "session", sessionID })
         perf("tui.select", { sessionID, crossDirectory, navigateMs: Math.round(performance.now() - started) })
-        if (!crossDirectory) return
-        // The new directory's reload fetches a provider catalog of several MB; started any earlier,
-        // it delays the messages queued behind it by about a second.
-        void sync.bootstrap({ fatal: false }).catch(() => {})
-        const location = performance.now()
-        void data.refreshDefaultLocation().finally(() =>
-          perf("tui.refresh_default_location", { ms: Math.round(performance.now() - location) }),
-        )
+        if (reloadPending) scheduleDirectoryReload()
       })
   })
+
+  // The new directory's reload fetches a provider catalog of several MB and blocks input while it is
+  // parsed, so it runs once switching settles in front rather than for every directory passed
+  // through or while agentview keeps this TUI hidden. A terminal that never reports focus counts as
+  // focused.
+  let reloadPending = false
+  let reloadTimer: ReturnType<typeof setTimeout> | undefined
+  let terminalFocused = true
+  const onReloadFocus = () => {
+    terminalFocused = true
+    if (reloadPending) scheduleDirectoryReload()
+  }
+  const onReloadBlur = () => {
+    terminalFocused = false
+    clearTimeout(reloadTimer)
+  }
+  renderer.on("focus", onReloadFocus)
+  renderer.on("blur", onReloadBlur)
+  onCleanup(() => {
+    renderer.off("focus", onReloadFocus)
+    renderer.off("blur", onReloadBlur)
+    clearTimeout(reloadTimer)
+  })
+  function scheduleDirectoryReload() {
+    clearTimeout(reloadTimer)
+    if (!terminalFocused) return
+    reloadTimer = setTimeout(() => {
+      reloadPending = false
+      void sync.bootstrap({ fatal: false }).catch(() => {})
+      const location = performance.now()
+      void data.refreshDefaultLocation().finally(() =>
+        perf("tui.refresh_default_location", { ms: Math.round(performance.now() - location) }),
+      )
+    }, DIRECTORY_RELOAD_DELAY_MS)
+  }
 
   event.on("session.deleted", (evt) => {
     if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {

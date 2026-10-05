@@ -96,6 +96,8 @@ const GO_UPSELL_ACCOUNT_RATE_LIMIT_LAST_SEEN_AT = "go_upsell_account_rate_limit_
 const GO_UPSELL_ACCOUNT_RATE_LIMIT_DONT_SHOW = "go_upsell_account_rate_limit_dont_show"
 const GO_UPSELL_WINDOW = 86_400_000 // 24 hrs
 const GO_UPSELL_PROVIDERS = new Set(["opencode", "opencode-go"])
+/** How long a session stays open before the rest of its history loads. */
+const FULL_HISTORY_DELAY_MS = 1_000
 
 export const alwaysSeparate = new WeakSet<BoxRenderable>()
 
@@ -317,7 +319,7 @@ export function Session() {
         } catch {}
       }
       editor.reconnect(result.data.directory)
-      await sync.session.sync(sessionID)
+      await sync.session.sync(sessionID, { firstPage: true })
       if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
@@ -360,6 +362,25 @@ export function Session() {
   const keymap = useOpencodeKeymap()
   const dialog = useDialog()
   const renderer = useRenderer()
+
+  // Laying out a long history blocks input for a moment, so load it only for a session that stays open
+  // in front, not for each one passed while switching or one switched to while agentview hides the TUI.
+  // A terminal that never reports focus counts as focused.
+  const [terminalFocused, setTerminalFocused] = createSignal(true)
+  const onFocus = () => setTerminalFocused(true)
+  const onBlur = () => setTerminalFocused(false)
+  renderer.on("focus", onFocus)
+  renderer.on("blur", onBlur)
+  onCleanup(() => {
+    renderer.off("focus", onFocus)
+    renderer.off("blur", onBlur)
+  })
+  createEffect(() => {
+    const sessionID = route.sessionID
+    if (!terminalFocused()) return
+    const timer = setTimeout(() => void sync.session.sync(sessionID).catch(() => {}), FULL_HISTORY_DELAY_MS)
+    onCleanup(() => clearTimeout(timer))
+  })
 
   event.on("session.status", (evt) => {
     if (evt.properties.sessionID !== route.sessionID) return
