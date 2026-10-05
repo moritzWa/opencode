@@ -60,6 +60,7 @@ import { DialogAlert } from "./ui/dialog-alert"
 import { DialogConfirm } from "./ui/dialog-confirm"
 import { ToastProvider, useToast } from "./ui/toast"
 import { isDefaultTitle } from "./util/session"
+import { perf, watchEventLoop } from "./util/perf"
 import { KVProvider, useKV } from "./context/kv"
 import * as Model from "./util/model"
 import { ArgsProvider, useArgs, type Args } from "./context/args"
@@ -480,6 +481,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
 
   const args = useArgs()
   onMount(() => {
+    watchEventLoop()
     batch(() => {
       if (args.agent) local.agent.set(args.agent)
       if (args.model) {
@@ -1008,8 +1010,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     const sessionID = evt.properties.sessionID
     const directory = evt.properties.targetDirectory
     selecting = sessionID
+    const started = performance.now()
     if (!directory || directory === sdk.directory) {
       route.navigate({ type: "session", sessionID })
+      perf("tui.select", { sessionID, crossDirectory: false, navigateMs: Math.round(performance.now() - started) })
       return
     }
     sdk.setDirectory(directory)
@@ -1023,9 +1027,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       })
       .catch(() => {})
       .finally(() => {
+        const fetchedMs = Math.round(performance.now() - started)
         if (selecting === sessionID) route.navigate({ type: "session", sessionID })
+        const navigatedMs = Math.round(performance.now() - started)
+        perf("tui.select", { sessionID, crossDirectory: true, sessionGetMs: fetchedMs, navigateMs: navigatedMs })
         void sync.bootstrap({ fatal: false }).catch(() => {})
-        void data.refreshDefaultLocation()
+        const location = performance.now()
+        void data.refreshDefaultLocation().finally(() =>
+          perf("tui.refresh_default_location", { ms: Math.round(performance.now() - location) }),
+        )
       })
   })
 

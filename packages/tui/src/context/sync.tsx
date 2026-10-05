@@ -32,6 +32,7 @@ import { batch, onMount } from "solid-js"
 import path from "path"
 import { useKV } from "./kv"
 import { usePermission } from "./permission"
+import { perf, timed } from "../util/perf"
 
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
@@ -462,12 +463,22 @@ export const {
     async function bootstrap(input: { fatal?: boolean } = {}) {
       const fatal = input.fatal ?? true
       const workspace = project.workspace.current()
-      const projectPromise = project.sync()
-      const sessionListPromise = projectPromise.then(() => listSessions())
+      const bootstrapStarted = performance.now()
+      const timings: Record<string, number> = {}
+      const projectPromise = timed(timings, "project", project.sync())
+      const sessionListPromise = projectPromise.then(() => timed(timings, "sessionList", listSessions()))
 
       // blocking - include session.list when continuing a session
-      const providersPromise = sdk.client.config.providers({ workspace }, { throwOnError: true })
-      const providerListPromise = sdk.client.provider.list({ workspace }, { throwOnError: true })
+      const providersPromise = timed(
+        timings,
+        "configProviders",
+        sdk.client.config.providers({ workspace }, { throwOnError: true }),
+      )
+      const providerListPromise = timed(
+        timings,
+        "providerList",
+        sdk.client.provider.list({ workspace }, { throwOnError: true }),
+      )
       const capabilitiesPromise = sdk.client.experimental.capabilities
         .get({ workspace }, { throwOnError: true })
         .then((x) => x.data)
@@ -476,8 +487,8 @@ export const {
         .get({ workspace }, { throwOnError: true })
         .then((x) => x.data)
         .catch(() => emptyConsoleState)
-      const agentsPromise = sdk.client.app.agents({ workspace }, { throwOnError: true })
-      const configPromise = sdk.client.config.get({ workspace }, { throwOnError: true })
+      const agentsPromise = timed(timings, "agents", sdk.client.app.agents({ workspace }, { throwOnError: true }))
+      const configPromise = timed(timings, "config", sdk.client.config.get({ workspace }, { throwOnError: true }))
       await Promise.all([
         providersPromise,
         providerListPromise,
@@ -513,6 +524,7 @@ export const {
             const config = responses[5]
             const sessions = responses[6]
 
+            const storeStarted = performance.now()
             batch(() => {
               setStore("provider", reconcile(providers.providers))
               setStore("provider_default", reconcile(providers.default))
@@ -523,9 +535,11 @@ export const {
               setStore("config", reconcile(config))
               if (sessions !== undefined) setStore("session", reconcile(sessions))
             })
+            timings.blockingStore = Math.round(performance.now() - storeStarted)
           })
         })
         .then(() => {
+          timings.blocking = Math.round(performance.now() - bootstrapStarted)
           if (store.status !== "complete") setStore("status", "partial")
           // non-blocking
           void Promise.all([
@@ -546,6 +560,11 @@ export const {
             project.workspace.sync(),
           ]).then(() => {
             setStore("status", "complete")
+            perf("tui.bootstrap", {
+              directory: sdk.directory,
+              ms: Math.round(performance.now() - bootstrapStarted),
+              ...timings,
+            })
           })
         })
         .catch(async (e) => {
@@ -626,12 +645,15 @@ export const {
               if (response.data) result.session.add(response.data)
               return response
             })
+            const syncStarted = performance.now()
+            const timings: Record<string, number> = {}
             const [session, messages, todo, diff] = await Promise.all([
-              sessionPromise,
-              sdk.client.session.messages({ sessionID, limit: 100 }),
-              sdk.client.session.todo({ sessionID }),
-              sdk.client.session.diff({ sessionID }),
+              timed(timings, "getMs", sessionPromise),
+              timed(timings, "messagesMs", sdk.client.session.messages({ sessionID, limit: 100 })),
+              timed(timings, "todoMs", sdk.client.session.todo({ sessionID })),
+              timed(timings, "diffMs", sdk.client.session.diff({ sessionID })),
             ])
+            const storeStarted = performance.now()
             setStore(
               produce((draft) => {
                 const match = search(draft.session, sessionID, (s) => s.id)
@@ -685,6 +707,15 @@ export const {
                 draft.session_diff[sessionID] = diff.data ?? []
               }),
             )
+            perf("tui.session_sync", {
+              sessionID,
+              ms: Math.round(performance.now() - syncStarted),
+              storeMs: Math.round(performance.now() - storeStarted),
+              messages: messages.data?.length ?? 0,
+              parts: (messages.data ?? []).reduce((count, message) => count + message.parts.length, 0),
+              diffFiles: diff.data?.length ?? 0,
+              ...timings,
+            })
             fullSyncedSessions.add(sessionID)
           })().finally(() => {
             syncingSessions.delete(sessionID)
