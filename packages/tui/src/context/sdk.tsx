@@ -6,6 +6,8 @@ import { batch, onCleanup, onMount } from "solid-js"
 
 /** Matches `MessageV2.OMIT_TOOL_MEDIA_HEADER` on the server. */
 const OMIT_TOOL_MEDIA_HEADER = "x-opencode-omit-tool-media"
+/** Matches `OMIT_SYNC_EVENTS_HEADER` in the server's global event handler. */
+const OMIT_SYNC_EVENTS_HEADER = "x-opencode-omit-sync-events"
 
 export type EventSource = {
   subscribe: (handler: (event: GlobalEvent) => void) => Promise<() => void>
@@ -25,7 +27,12 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     let directory = props.directory
 
     // The TUI never draws the files a tool returned, and an image read is a megabyte or more of base64.
-    const headers = { ...Object.fromEntries(new Headers(props.headers)), [OMIT_TOOL_MEDIA_HEADER]: "1" }
+    // It also drops `sync` events, the durable copy of each event, as they arrive.
+    const headers = {
+      ...Object.fromEntries(new Headers(props.headers)),
+      [OMIT_TOOL_MEDIA_HEADER]: "1",
+      ...(Flag.OPENCODE_EXPERIMENTAL_WORKSPACES ? {} : { [OMIT_SYNC_EVENTS_HEADER]: "1" }),
+    }
 
     function createSDK() {
       return createOpencodeClient({

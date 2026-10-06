@@ -528,6 +528,20 @@ export const {
     const exit = useExit()
     const args = useArgs()
 
+    // Every provider and model the server knows of, several MB, which only the connect dialogs list. It
+    // loads when one opens rather than on each directory reload, and a reload marks it stale.
+    let providerCatalog: Promise<void> | undefined
+    function loadProviderCatalog() {
+      providerCatalog ??= sdk.client.provider
+        .list({ workspace: project.workspace.current() }, { throwOnError: true })
+        .then((response) => setStore("provider_next", reconcile(response.data)))
+        .catch((error) => {
+          providerCatalog = undefined
+          throw error
+        })
+      return providerCatalog
+    }
+
     async function bootstrap(input: { fatal?: boolean } = {}) {
       const fatal = input.fatal ?? true
       const workspace = project.workspace.current()
@@ -542,11 +556,7 @@ export const {
         "configProviders",
         sdk.client.config.providers({ workspace }, { throwOnError: true }),
       )
-      const providerListPromise = timed(
-        timings,
-        "providerList",
-        sdk.client.provider.list({ workspace }, { throwOnError: true }),
-      )
+      providerCatalog = undefined
       const capabilitiesPromise = sdk.client.experimental.capabilities
         .get({ workspace }, { throwOnError: true })
         .then((x) => x.data)
@@ -559,7 +569,6 @@ export const {
       const configPromise = timed(timings, "config", sdk.client.config.get({ workspace }, { throwOnError: true }))
       await Promise.all([
         providersPromise,
-        providerListPromise,
         capabilitiesPromise,
         agentsPromise,
         configPromise,
@@ -568,7 +577,6 @@ export const {
       ])
         .then(async () => {
           const providersResponse = providersPromise.then((x) => x.data!)
-          const providerListResponse = providerListPromise.then((x) => x.data!)
           const capabilitiesResponse = capabilitiesPromise
           const consoleStateResponse = consoleStatePromise
           const agentsResponse = agentsPromise.then((x) => x.data ?? [])
@@ -577,7 +585,6 @@ export const {
 
           return Promise.all([
             providersResponse,
-            providerListResponse,
             capabilitiesResponse,
             consoleStateResponse,
             agentsResponse,
@@ -585,18 +592,16 @@ export const {
             ...(sessionListResponse ? [sessionListResponse] : []),
           ]).then((responses) => {
             const providers = responses[0]
-            const providerList = responses[1]
-            const capabilities = responses[2]
-            const consoleState = responses[3]
-            const agents = responses[4]
-            const config = responses[5]
-            const sessions = responses[6]
+            const capabilities = responses[1]
+            const consoleState = responses[2]
+            const agents = responses[3]
+            const config = responses[4]
+            const sessions = responses[5]
 
             const storeStarted = performance.now()
             batch(() => {
               setStore("provider", reconcile(providers.providers))
               setStore("provider_default", reconcile(providers.default))
-              setStore("provider_next", reconcile(providerList))
               setStore("capabilities", "experimentalBackgroundSubagents", capabilities?.backgroundSubagents === true)
               setStore("console_state", reconcile(consoleState))
               setStore("agent", reconcile(agents))
@@ -817,6 +822,8 @@ export const {
         },
       },
       bootstrap,
+      /** Load the full provider catalog into `provider_next`, once per directory reload. */
+      providerCatalog: loadProviderCatalog,
     }
     return result
   },
