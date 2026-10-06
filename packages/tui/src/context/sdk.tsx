@@ -4,6 +4,9 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import { createSimpleContext } from "./helper"
 import { batch, onCleanup, onMount } from "solid-js"
 
+/** Matches `MessageV2.OMIT_TOOL_MEDIA_HEADER` on the server. */
+const OMIT_TOOL_MEDIA_HEADER = "x-opencode-omit-tool-media"
+
 export type EventSource = {
   subscribe: (handler: (event: GlobalEvent) => void) => Promise<() => void>
 }
@@ -21,13 +24,16 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     let sse: AbortController | undefined
     let directory = props.directory
 
+    // The TUI never draws the files a tool returned, and an image read is a megabyte or more of base64.
+    const headers = { ...Object.fromEntries(new Headers(props.headers)), [OMIT_TOOL_MEDIA_HEADER]: "1" }
+
     function createSDK() {
       return createOpencodeClient({
         baseUrl: props.url,
         signal: abort.signal,
         directory,
         fetch: props.fetch,
-        headers: props.headers,
+        headers,
       })
     }
 

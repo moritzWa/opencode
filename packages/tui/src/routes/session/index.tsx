@@ -96,8 +96,8 @@ const GO_UPSELL_ACCOUNT_RATE_LIMIT_LAST_SEEN_AT = "go_upsell_account_rate_limit_
 const GO_UPSELL_ACCOUNT_RATE_LIMIT_DONT_SHOW = "go_upsell_account_rate_limit_dont_show"
 const GO_UPSELL_WINDOW = 86_400_000 // 24 hrs
 const GO_UPSELL_PROVIDERS = new Set(["opencode", "opencode-go"])
-/** How long a session stays open before the rest of its history loads. */
-const FULL_HISTORY_DELAY_MS = 1_000
+/** How often the view checks whether it is scrolled near the top of a partly loaded history. */
+const OLDER_MESSAGES_POLL_MS = 200
 
 export const alwaysSeparate = new WeakSet<BoxRenderable>()
 
@@ -224,6 +224,11 @@ export function Session() {
     const index = messages().findIndex((message) => message.id === messageID)
     return index === -1 ? messages() : messages().slice(0, index)
   }
+  // Only the latest messages are loaded here, so a transcript fetches the whole session.
+  async function transcriptMessages(sessionID: string) {
+    const response = await sdk.client.session.messages({ sessionID }, { throwOnError: true })
+    return response.data ?? []
+  }
   const foregroundTasks = createMemo(() =>
     sync.data.capabilities.experimentalBackgroundSubagents
       ? messages().flatMap((message) =>
@@ -293,6 +298,7 @@ export function Session() {
 
   createEffect(() => {
     const sessionID = route.sessionID
+    sync.session.track(sessionID)
     void (async () => {
       const previousWorkspace = untrack(() => project.workspace.current())
       const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
@@ -363,24 +369,34 @@ export function Session() {
   const dialog = useDialog()
   const renderer = useRenderer()
 
-  // Laying out a long history blocks input for a moment, so load it only for a session that stays open
-  // in front, not for each one passed while switching or one switched to while agentview hides the TUI.
-  // A terminal that never reports focus counts as focused.
-  const [terminalFocused, setTerminalFocused] = createSignal(true)
-  const onFocus = () => setTerminalFocused(true)
-  const onBlur = () => setTerminalFocused(false)
-  renderer.on("focus", onFocus)
-  renderer.on("blur", onBlur)
-  onCleanup(() => {
-    renderer.off("focus", onFocus)
-    renderer.off("blur", onBlur)
-  })
-  createEffect(() => {
+  // Laying out a long history blocks input for a moment, so older messages load only once the view is
+  // scrolled to within a screen of the top. Scrolling in code does not report a change, so it is polled.
+  let loadingOlder = false
+  const olderPoll = setInterval(() => {
     const sessionID = route.sessionID
-    if (!terminalFocused()) return
-    const timer = setTimeout(() => void sync.session.sync(sessionID).catch(() => {}), FULL_HISTORY_DELAY_MS)
-    onCleanup(() => clearTimeout(timer))
-  })
+    if (loadingOlder || !scroll || !sync.session.partial(sessionID)) return
+    if (scroll.scrollTop > scroll.height) return
+    loadingOlder = true
+    const fromBottom = scroll.scrollHeight - scroll.scrollTop
+    void sync.session
+      .sync(sessionID)
+      .then(() => keepScrollPosition(sessionID, fromBottom))
+      .catch(() => {})
+      .finally(() => {
+        loadingOlder = false
+      })
+  }, OLDER_MESSAGES_POLL_MS)
+  onCleanup(() => clearInterval(olderPoll))
+
+  // Older messages arrive above the ones on screen; keep those where they were once they are laid out.
+  async function keepScrollPosition(sessionID: string, fromBottom: number) {
+    const before = scroll?.scrollHeight
+    for (let frame = 0; frame < 30 && scroll?.scrollHeight === before; frame++) {
+      await new Promise((resolve) => setTimeout(resolve, 16))
+    }
+    if (route.sessionID !== sessionID || !scroll) return
+    scroll.scrollTop = scroll.scrollHeight - fromBottom
+  }
 
   event.on("session.status", (evt) => {
     if (evt.properties.sessionID !== route.sessionID) return
@@ -952,17 +968,12 @@ export function Session() {
         try {
           const sessionData = session()
           if (!sessionData) return
-          const sessionMessages = messages()
-          const transcript = formatTranscript(
-            sessionData,
-            sessionMessages.map((msg) => ({ info: msg, parts: sync.data.part[msg.id] ?? [] })),
-            {
-              thinking: showThinking(),
-              toolDetails: showDetails(),
-              assistantMetadata: showAssistantMetadata(),
-              providers: sync.data.provider,
-            },
-          )
+          const transcript = formatTranscript(sessionData, await transcriptMessages(sessionData.id), {
+            thinking: showThinking(),
+            toolDetails: showDetails(),
+            assistantMetadata: showAssistantMetadata(),
+            providers: sync.data.provider,
+          })
           await clipboard.write?.(transcript)
           toast.show({ message: "Session transcript copied to clipboard!", variant: "success" })
         } catch {
@@ -982,7 +993,6 @@ export function Session() {
         try {
           const sessionData = session()
           if (!sessionData) return
-          const sessionMessages = messages()
 
           const defaultFilename = `session-${sessionData.id.slice(0, 8)}.md`
 
@@ -997,16 +1007,12 @@ export function Session() {
 
           if (options === null) return
 
-          const transcript = formatTranscript(
-            sessionData,
-            sessionMessages.map((msg) => ({ info: msg, parts: sync.data.part[msg.id] ?? [] })),
-            {
-              thinking: options.thinking,
-              toolDetails: options.toolDetails,
-              assistantMetadata: options.assistantMetadata,
-              providers: sync.data.provider,
-            },
-          )
+          const transcript = formatTranscript(sessionData, await transcriptMessages(sessionData.id), {
+            thinking: options.thinking,
+            toolDetails: options.toolDetails,
+            assistantMetadata: options.assistantMetadata,
+            providers: sync.data.provider,
+          })
 
           if (options.openWithoutSaving) {
             // Just open in editor without saving

@@ -28,6 +28,7 @@ test("removals in a session this client never loaded do not stop later events", 
   const { app, emit, sync } = await mount(undefined, tmp.path)
 
   try {
+    sync.session.track(loaded)
     expect(() =>
       emit(
         global({

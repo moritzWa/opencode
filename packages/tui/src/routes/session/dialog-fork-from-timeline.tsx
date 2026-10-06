@@ -17,6 +17,7 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
 
   onMount(() => {
     dialog.setSize("large")
+    void sync.session.sync(props.sessionID).catch(() => {})
   })
 
   const options = createMemo((): DialogSelectOption<string | undefined>[] => {

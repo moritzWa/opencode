@@ -37,6 +37,18 @@ import { perf, timed } from "../util/perf"
 /** Enough messages to fill a tall terminal before the rest of a session's history loads. */
 const FIRST_PAGE_MESSAGES = 20
 
+/** Sessions opened most recently whose messages stay loaded, so switching back to one is instant. */
+const KEPT_SESSIONS = 4
+
+/** The TUI never draws the files a tool returned; a server that still sends them gets them dropped here. */
+function omitToolMedia(part: Part): Part {
+  if (part.type !== "tool" || part.state.status !== "completed" || !part.state.attachments?.length) return part
+  return {
+    ...part,
+    state: { ...part.state, attachments: part.state.attachments.map((attachment) => ({ ...attachment, url: "" })) },
+  }
+}
+
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
   switchableOrgCount: 0,
@@ -162,6 +174,53 @@ export const {
       hydratingSessions.get(sessionID)?.parts.add(partID)
     }
 
+    // The event stream carries every session on the server. Only sessions opened recently, and their
+    // subagent sessions, keep their messages here; the rest are dropped and load again when reopened.
+    const recentSessions: string[] = []
+    const loaded = (sessionID: string) =>
+      hydratingSessions.has(sessionID) || firstPageSessions.has(sessionID) || fullSyncedSessions.has(sessionID)
+
+    function track(sessionID: string) {
+      const index = recentSessions.indexOf(sessionID)
+      if (index !== -1) recentSessions.splice(index, 1)
+      recentSessions.push(sessionID)
+      recentSessions.splice(0, Math.max(0, recentSessions.length - KEPT_SESSIONS))
+      if (!loaded(sessionID)) hydratingSessions.set(sessionID, { messages: new Set(), parts: new Set() })
+    }
+
+    function kept(sessionID: string) {
+      let id: string | undefined = sessionID
+      for (let depth = 0; id && depth < 8; depth++) {
+        if (recentSessions.includes(id)) return true
+        id = result.session.get(id)?.parentID
+      }
+      return false
+    }
+
+    function evict() {
+      const held = new Set([...Object.keys(store.message), ...firstPageSessions, ...fullSyncedSessions])
+      const dropped = new Set([...held].filter((id) => !syncingSessions.has(id) && !kept(id)))
+      if (dropped.size === 0) return
+      setStore(
+        produce((draft) => {
+          for (const [messageID, parts] of Object.entries(draft.part)) {
+            if (dropped.has(parts[0]?.sessionID ?? "")) delete draft.part[messageID]
+          }
+          for (const id of dropped) {
+            for (const message of draft.message[id] ?? []) delete draft.part[message.id]
+            delete draft.message[id]
+            delete draft.todo[id]
+            delete draft.session_diff[id]
+          }
+        }),
+      )
+      for (const id of dropped) {
+        firstPageSessions.delete(id)
+        fullSyncedSessions.delete(id)
+        hydratingSessions.delete(id)
+      }
+    }
+
     function sessionListQuery(): { scope?: "project"; path?: string } {
       if (!kv.get("session_directory_filter_enabled", true)) return { scope: "project" }
       if (!project.data.instance.path.worktree || !project.data.instance.path.directory) return { scope: "project" }
@@ -276,10 +335,12 @@ export const {
         }
 
         case "todo.updated":
+          if (!loaded(event.properties.sessionID)) break
           setStore("todo", event.properties.sessionID, event.properties.todos)
           break
 
         case "session.diff":
+          if (!loaded(event.properties.sessionID)) break
           setStore("session_diff", event.properties.sessionID, event.properties.diff)
           break
 
@@ -336,6 +397,7 @@ export const {
           touchMessage(event.properties.info.sessionID, event.properties.info.id)
           const messages = store.message[event.properties.info.sessionID]
           if (!messages) {
+            if (!loaded(event.properties.info.sessionID)) break
             setStore("message", event.properties.info.sessionID, [event.properties.info])
             break
           }
@@ -389,22 +451,24 @@ export const {
           break
         }
         case "message.part.updated": {
-          touchPart(event.properties.part.sessionID, event.properties.part.id)
-          const parts = store.part[event.properties.part.messageID]
+          const part = omitToolMedia(event.properties.part)
+          touchPart(part.sessionID, part.id)
+          const parts = store.part[part.messageID]
           if (!parts) {
-            setStore("part", event.properties.part.messageID, [event.properties.part])
+            if (!loaded(part.sessionID)) break
+            setStore("part", part.messageID, [part])
             break
           }
-          const result = search(parts, event.properties.part.id, (part) => part.id)
+          const result = search(parts, part.id, (part) => part.id)
           if (result.found) {
-            setStore("part", event.properties.part.messageID, result.index, reconcile(event.properties.part))
+            setStore("part", part.messageID, result.index, reconcile(part))
             break
           }
           setStore(
             "part",
-            event.properties.part.messageID,
+            part.messageID,
             produce((draft) => {
-              draft.splice(result.index, 0, event.properties.part)
+              draft.splice(result.index, 0, part)
             }),
           )
           break
@@ -641,8 +705,11 @@ export const {
          * long session draws many times faster than its full history; a later full sync adds the rest.
          */
         async sync(sessionID: string, input: { firstPage?: boolean } = {}): Promise<void> {
-          if (fullSyncedSessions.has(sessionID)) return
-          if (input.firstPage && firstPageSessions.has(sessionID)) return
+          if (input.firstPage) track(sessionID)
+          if (fullSyncedSessions.has(sessionID) || (input.firstPage && firstPageSessions.has(sessionID))) {
+            if (input.firstPage) evict()
+            return
+          }
           const syncing = syncingSessions.get(sessionID)
           if (syncing) return input.firstPage ? syncing : syncing.then(() => result.session.sync(sessionID))
           const limit = input.firstPage ? FIRST_PAGE_MESSAGES : 100
@@ -704,7 +771,7 @@ export const {
                     ) {
                       return [current]
                     }
-                    return [part]
+                    return [omitToolMedia(part)]
                   })
                   parts.push(
                     ...currentParts.filter(
@@ -728,7 +795,7 @@ export const {
               limit,
               ...timings,
             })
-            if (input.firstPage) {
+            if (input.firstPage && (messages.data?.length ?? 0) >= limit) {
               firstPageSessions.add(sessionID)
               return
             }
@@ -737,9 +804,16 @@ export const {
           })().finally(() => {
             syncingSessions.delete(sessionID)
             if (!firstPageSessions.has(sessionID)) hydratingSessions.delete(sessionID)
+            if (input.firstPage) evict()
           })
           syncingSessions.set(sessionID, task)
           return task
+        },
+        /** Keep events for a session about to be opened, before its first page has loaded. */
+        track,
+        /** Whether only the latest page of the session is loaded and older messages exist. */
+        partial(sessionID: string) {
+          return firstPageSessions.has(sessionID)
         },
       },
       bootstrap,

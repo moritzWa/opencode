@@ -7,7 +7,9 @@ import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecy
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { Effect, Queue } from "effect"
 import * as Stream from "effect/Stream"
-import { HttpServerResponse } from "effect/unstable/http"
+import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import { MessageV2 } from "@/session/message-v2"
+import type { Part } from "@opencode-ai/core/v1/session"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
@@ -22,11 +24,21 @@ function eventData(data: unknown): Sse.Event {
   }
 }
 
+function omitToolMedia(event: GlobalBusEvent): GlobalBusEvent {
+  if (event.payload?.type !== MessageV2.Event.PartUpdated.type) return event
+  const properties = event.payload.properties as { part: Part }
+  const part = MessageV2.omitToolMedia(properties.part)
+  if (part === properties.part) return event
+  return { ...event, payload: { ...event.payload, properties: { ...properties, part } } }
+}
+
 function eventResponse() {
   return Effect.gen(function* () {
     yield* Effect.logInfo("global event connected")
+    const request = yield* HttpServerRequest.HttpServerRequest
+    const lean = Boolean(request.headers[MessageV2.OMIT_TOOL_MEDIA_HEADER])
     const events = Stream.callback<GlobalBusEvent>((queue) => {
-      const handler = (event: GlobalBusEvent) => Queue.offerUnsafe(queue, event)
+      const handler = (event: GlobalBusEvent) => Queue.offerUnsafe(queue, lean ? omitToolMedia(event) : event)
       return Effect.acquireRelease(
         Effect.sync(() => GlobalBus.on("event", handler)),
         () => Effect.sync(() => GlobalBus.off("event", handler)),
