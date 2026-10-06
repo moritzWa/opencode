@@ -175,6 +175,7 @@ export function Prompt(props: PromptProps) {
   const list = createMemo(() => props.placeholders?.normal ?? [])
   const shell = createMemo(() => props.placeholders?.shell ?? [])
   const fileContextEnabled = createMemo(() => kv.get("file_context_enabled", true))
+  const footerHintsEnabled = createMemo(() => kv.get("footer_hints_enabled", true))
   const [dismissedEditorSelectionKey, setDismissedEditorSelectionKey] = createSignal<string>()
   const editorContext = createMemo(() => {
     const selection = fileContextEnabled() ? editor.selection() : undefined
@@ -1682,12 +1683,14 @@ export function Prompt(props: PromptProps) {
               </Show>
               <Switch>
                 <Match when={store.mode === "normal"}>
-                  <text fg={theme.text}>
-                    {agentShortcut()} <span style={{ fg: theme.textMuted }}>agents</span>
-                  </text>
-                  <text fg={theme.text}>
-                    {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
-                  </text>
+                  <Show when={footerHintsEnabled()}>
+                    <text fg={theme.text}>
+                      {agentShortcut()} <span style={{ fg: theme.textMuted }}>agents</span>
+                    </text>
+                    <text fg={theme.text}>
+                      {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
+                    </text>
+                  </Show>
                 </Match>
                 <Match when={store.mode === "shell"}>
                   <text fg={theme.text}>
