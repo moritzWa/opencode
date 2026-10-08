@@ -1,6 +1,7 @@
 import type { NamedError } from "@opencode-ai/core/util/error"
 import { APICallError } from "ai"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { MessageV2 } from "./message-v2"
 import { Cause, Clock, Duration, Effect, Schedule } from "effect"
 import { iife } from "@/util/iife"
 import { isRecord } from "@/util/record"
