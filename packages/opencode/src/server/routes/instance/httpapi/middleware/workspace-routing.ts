@@ -13,6 +13,7 @@ import { HttpClient, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
 import * as Socket from "effect/unstable/socket/Socket"
 import { InvalidRequestError } from "../errors"
+import { statSync } from "node:fs"
 
 // Query fields this middleware reads from the URL. Spread into every
 // endpoint query schema in groups that apply WorkspaceRoutingMiddleware,
@@ -85,6 +86,18 @@ function selectedV2WorkspaceID(
 
 function defaultDirectory(request: HttpServerRequest.HttpServerRequest, url: URL): string {
   return url.searchParams.get("directory") || request.headers["x-opencode-directory"] || process.cwd()
+}
+
+// A session keeps the directory it was created in, which can be deleted later
+// (a removed git worktree). Routing to it would fail every request for that
+// session, so fall back to the directory the client asked for.
+function existingSessionDirectory(session?: Session.Info): string | undefined {
+  if (!session?.directory) return undefined
+  try {
+    return statSync(session.directory).isDirectory() ? session.directory : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function shouldStayOnControlPlane(request: HttpServerRequest.HttpServerRequest, url: URL): boolean {
@@ -179,7 +192,7 @@ function planRequest(
     }
 
     return RequestPlan.Local({
-      directory: session?.directory || defaultDirectory(request, url),
+      directory: existingSessionDirectory(session) ?? defaultDirectory(request, url),
       workspaceID: envWorkspaceID ?? workspaceID,
     })
   })

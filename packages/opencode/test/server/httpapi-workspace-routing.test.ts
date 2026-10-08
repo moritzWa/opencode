@@ -524,6 +524,46 @@ describe("HttpApi workspace routing middleware", () => {
     }),
   )
 
+  it.live("routes a session whose directory was deleted to the requested directory", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const removedWorktree = path.join(dir, ".claude/worktrees/gone")
+      const directories: Record<string, string> = { ses_gone: removedWorktree, ses_here: dir }
+      const SessionProbeApi = HttpApi.make("session-directory-probe").add(
+        HttpApiGroup.make("probe")
+          .add(
+            HttpApiEndpoint.get("get", "/session/:sessionID", {
+              params: { sessionID: Schema.String },
+              query: WorkspaceRoutingQuery,
+              success: ProbeResult,
+            }),
+          )
+          .middleware(WorkspaceRoutingMiddleware),
+      )
+      yield* HttpApiBuilder.layer(SessionProbeApi).pipe(
+        Layer.provide(
+          HttpApiBuilder.group(SessionProbeApi, "probe", (handlers) => handlers.handle("get", () => routeContextResponse)),
+        ),
+        Layer.provide(workspaceRoutingTestLayer),
+        Layer.provide(
+          Layer.mock(Session.Service)({
+            get: (sessionID) =>
+              Effect.succeed({ id: sessionID, directory: directories[sessionID] } as unknown as Session.Info),
+          }),
+        ),
+        HttpRouter.serve,
+        Layer.build,
+      )
+
+      const query = `?directory=${encodeURIComponent(dir)}`
+      const gone = yield* HttpClient.get(`/session/ses_gone${query}`)
+      const here = yield* HttpClient.get(`/session/ses_here?directory=${encodeURIComponent(removedWorktree)}`)
+
+      expect(yield* gone.json).toEqual({ directory: dir, workspaceID: null })
+      expect(yield* here.json).toEqual({ directory: dir, workspaceID: null })
+    }),
+  )
+
   it.live("routes local workspace requests through WorkspaceRouteContext", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
