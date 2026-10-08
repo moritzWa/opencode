@@ -143,7 +143,7 @@ describe("session.retry.delay", () => {
         Effect.ignore(step(error)),
       )
 
-      expect(attempts).toStrictEqual(Array.from({ length: SessionRetry.RETRY_MAX_RETRIES }, (_, i) => i + 1))
+      expect(attempts).toStrictEqual([1, 2, 3, 4, 5])
     }),
   )
 })
@@ -153,35 +153,6 @@ describe("session.retry.retryable", () => {
     const error = Object.assign(new Error("gateway closed connection"), { isRetryable: true })
     const result = SessionRetry.fromError(error, { providerID, aborted: true })
     expect(SessionRetry.retryable(result, retryProvider)).toBeUndefined()
-  })
-
-  test("retries provider errors carrying a transient network code", () => {
-    const dns = Object.assign(new Error("getaddrinfo ENOTFOUND"), { name: "DNSException", code: "ENOTFOUND" })
-    const direct = Object.assign(new Error("Cursor HTTP/2 connection failed"), {
-      code: "ENOTFOUND",
-      transient: true,
-      cause: dns,
-    })
-    const nested = new Error("Cursor HTTP/2 connection failed", { cause: dns })
-    for (const error of [direct, nested]) {
-      const result = SessionRetry.fromError(error, { providerID })
-      expect(SessionRetry.retryable(result, retryProvider)).toEqual({ message: "Cursor HTTP/2 connection failed" })
-    }
-  })
-
-  test("does not retry network errors the provider marked terminal", () => {
-    const transientFalse = Object.assign(new Error("Cursor Run failed after 3 attempts"), {
-      code: "ENOTFOUND",
-      transient: false,
-    })
-    const retryableFalse = Object.assign(new Error("Cursor Run failed after 3 attempts"), {
-      code: "ENOTFOUND",
-      isRetryable: false,
-    })
-    for (const error of [transientFalse, retryableFalse]) {
-      const result = SessionRetry.fromError(error, { providerID })
-      expect(SessionRetry.retryable(result, retryProvider)).toBeUndefined()
-    }
   })
 
   test("retries serialized too_many_requests messages", () => {

@@ -17,7 +17,6 @@ import { Session } from "@/session/session"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionProcessor } from "../../src/session/processor"
-import { SessionRetry } from "../../src/session/retry"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
@@ -650,9 +649,9 @@ retryExhausted.it.effect("session.processor surfaces an error when an empty stre
       Effect.gen(function* () {
         const { handle, input, msg } = yield* runRetryCase(dir)
         const fiber = yield* handle.process(input).pipe(Effect.forkChild)
-        yield* TestClock.adjust("10 minutes")
+        yield* TestClock.adjust("2 minutes")
         expect(yield* Fiber.join(fiber)).toBe("stop")
-        expect(retryExhausted.calls()).toBe(SessionRetry.RETRY_MAX_RETRIES + 1)
+        expect(retryExhausted.calls()).toBe(6)
         expect(handle.message.error?.name).toBe("APIError")
         const stored = yield* MessageV2.get({ sessionID: msg.sessionID, messageID: msg.id })
         if (stored.info.role !== "assistant") throw new Error("expected assistant")
