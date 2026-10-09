@@ -7,11 +7,11 @@ index 815856bd386617571e24bda7b45da694c731cd04..db756763d09503666c4c1d096770aff8
      const items = token.items ?? [];
      const start = token.start === "" || token.start === undefined || token.start === null ? 1 : Number(token.start);
 -    const markerWidth = Math.max(1, ...items.map((_2, index) => (token.ordered ? `${start + index}.` : "-").length));
-+    const markerWidth = Math.max(1, ...items.map((_2, index) => (token.ordered ? `${start + index}.` : "•").length));
++    const markerWidth = Math.max(1, ...items.map((_2, index) => (token.ordered ? `${start + index}.` : "●").length));
      return items.map((item, index) => ({
        item,
 -      marker: token.ordered ? `${start + index}.` : "-",
-+      marker: token.ordered ? `${start + index}.` : "•",
++      marker: token.ordered ? `${start + index}.` : "●",
        markerWidth,
        id: `${id}-item-${index}`
      }));
@@ -24,11 +24,11 @@ index 0ddf03bf666a05f50c66bef32af65b1403ed0192..aa4e2d280d8b79e445356f76b2b8f89d
      const items = token.items ?? [];
      const start = token.start === "" || token.start === undefined || token.start === null ? 1 : Number(token.start);
 -    const markerWidth = Math.max(1, ...items.map((_2, index) => (token.ordered ? `${start + index}.` : "-").length));
-+    const markerWidth = Math.max(1, ...items.map((_2, index) => (token.ordered ? `${start + index}.` : "•").length));
++    const markerWidth = Math.max(1, ...items.map((_2, index) => (token.ordered ? `${start + index}.` : "●").length));
      return items.map((item, index) => ({
        item,
 -      marker: token.ordered ? `${start + index}.` : "-",
-+      marker: token.ordered ? `${start + index}.` : "•",
++      marker: token.ordered ? `${start + index}.` : "●",
        markerWidth,
        id: `${id}-item-${index}`
      }));
