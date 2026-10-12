@@ -1708,10 +1708,10 @@ export function Prompt(props: PromptProps) {
               <Switch>
                 <Match when={store.mode === "normal"}>
                   <Show when={footerHintsEnabled()}>
-                    <text fg={theme.text}>
+                    <text fg={theme.text} wrapMode="none" flexShrink={0}>
                       {agentShortcut()} <span style={{ fg: theme.textMuted }}>agents</span>
                     </text>
-                    <text fg={theme.text}>
+                    <text fg={theme.text} wrapMode="none" flexShrink={0}>
                       {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
                     </text>
                   </Show>

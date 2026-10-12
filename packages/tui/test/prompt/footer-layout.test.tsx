@@ -34,8 +34,17 @@ test("long subagent names stay on one line beside fixed speech controls", async 
                         />
                       </box>
                     </box>
-                    <box flexShrink={0}>
-                      <text wrapMode="none">play − 2.1x + stop</text>
+                    <box flexDirection="row" gap={2} flexShrink={0} maxWidth="60%" minWidth={0}>
+                      {width >= 80 && (
+                        <box flexShrink={1} minWidth={0} overflow="hidden">
+                          <text wrapMode="none" truncate>
+                            ctx 120k · /compact
+                          </text>
+                        </box>
+                      )}
+                      <box flexShrink={0}>
+                        <text wrapMode="none">play − 2.1x + stop</text>
+                      </box>
                     </box>
                   </box>
                 </RouteProvider>
@@ -57,6 +66,7 @@ test("long subagent names stay on one line beside fixed speech controls", async 
       expect(lines).toHaveLength(1)
       expect(lines[0]).toContain("esc again to undo")
       expect(lines[0]).toContain("play − 2.1x + stop")
+      if (width >= 80) expect(lines[0]).toContain("ctx 120k · /compact")
     } finally {
       app.renderer.destroy()
     }

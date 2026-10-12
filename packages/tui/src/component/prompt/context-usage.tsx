@@ -29,7 +29,7 @@ export function ContextUsage(props: { sessionID?: string }) {
         <box flexShrink={1} minWidth={0} overflow="hidden">
           <text fg={item().warn ? theme.warning : theme.textMuted} wrapMode="none" truncate>
             {item().label}
-            {item().warn ? " · /compact to trim" : ""}
+            {item().warn ? " · /compact" : ""}
           </text>
         </box>
       )}
