@@ -60,6 +60,7 @@ import { useLocation } from "../../context/location"
 import { Identifier } from "@opencode-ai/core/id/id"
 import { createQuickUndo } from "./quick-undo"
 import { RunningSubagents, runningSubagents } from "./running-subagents"
+import { ContextUsage } from "./context-usage"
 
 registerOpencodeSpinner()
 
@@ -1540,6 +1541,8 @@ export function Prompt(props: PromptProps) {
                 flexDirection="row"
                 gap={1}
                 flexGrow={1}
+                flexShrink={1}
+                minWidth={0}
                 justifyContent={status().type === "retry" ? "space-between" : "flex-start"}
               >
                 <box flexShrink={0} flexDirection="row" gap={1}>
@@ -1607,14 +1610,14 @@ export function Prompt(props: PromptProps) {
                     })()}
                   </box>
                 </box>
-                <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
+                <text flexShrink={0} wrapMode="none" fg={store.interrupt > 0 ? theme.primary : theme.text}>
                   esc{" "}
                   <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
                     {store.interrupt > 0 ? (store.undo ? "again to undo" : "again to interrupt") : "interrupt"}
                   </span>
                 </text>
                 <Show when={status().type !== "retry" && subagents().length > 0}>
-                  <box marginLeft={1}>
+                  <box marginLeft={1} flexShrink={1} minWidth={0} overflow="hidden">
                     <RunningSubagents list={subagents()} />
                   </box>
                 </Show>
@@ -1690,8 +1693,13 @@ export function Prompt(props: PromptProps) {
             </Match>
           </Switch>
           <Show when={status().type !== "retry"}>
-            <box gap={2} flexDirection="row" flexShrink={0}>
-              {props.footer}
+            <box gap={2} flexDirection="row" flexShrink={0} maxWidth="60%" minWidth={0}>
+              <Show when={dimensions().width >= 80}>
+                <ContextUsage sessionID={props.sessionID} />
+              </Show>
+              <box flexDirection="row" gap={2} flexShrink={0}>
+                {props.footer}
+              </box>
               <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
                 {(file) => (
                   <text fg={editorContextLabelState() === "pending" ? theme.secondary : theme.textMuted}>{file()}</text>

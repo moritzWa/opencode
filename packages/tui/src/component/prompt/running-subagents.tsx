@@ -28,17 +28,29 @@ export function RunningSubagents(props: { list: RunningSubagent[] }) {
       <Show
         when={props.list.length <= 2}
         fallback={
-          <box onMouseUp={() => open(props.list[0].id)}>
-            <Spinner color={theme.textMuted}>{props.list.length} subagents</Spinner>
+          <box minWidth={0} flexShrink={1} overflow="hidden" onMouseUp={() => open(props.list[0].id)}>
+            <text fg={theme.textMuted} wrapMode="none" truncate>
+              {props.list.length} subagents
+            </text>
           </box>
         }
       >
         <For each={props.list}>
           {(item) => (
-            <box onMouseUp={() => open(item.id)}>
-              <Spinner color={theme.textMuted}>
+            <box
+              minWidth={0}
+              flexShrink={1}
+              flexDirection="row"
+              gap={1}
+              overflow="hidden"
+              onMouseUp={() => open(item.id)}
+            >
+              <box flexShrink={0}>
+                <Spinner color={theme.textMuted} />
+              </box>
+              <text fg={theme.textMuted} wrapMode="none" truncate>
                 {Locale.truncate(item.title, props.list.length === 1 ? 40 : 24)}
-              </Spinner>
+              </text>
             </box>
           )}
         </For>
