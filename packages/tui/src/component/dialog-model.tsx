@@ -51,11 +51,20 @@ export function DialogModel(props: { providerID?: string }) {
     }
 
     const favoriteOptions = toOptions(favorites, "Favorites")
-    const recentOptions = toOptions(
-      recents.filter(
-        (item) => !favorites.some((fav) => fav.providerID === item.providerID && fav.modelID === item.modelID),
+    // Recents are grouped by provider (one headed group each, so there is a gap between them) and sorted by
+    // name, instead of listed by recency, which interleaves vendors and is hard to scan.
+    const recentOptions = pipe(
+      toOptions(
+        recents.filter(
+          (item) => !favorites.some((fav) => fav.providerID === item.providerID && fav.modelID === item.modelID),
+        ),
+        "Recent",
       ),
-      "Recent",
+      sortBy(
+        (option) => option.description ?? "",
+        (option) => option.title,
+      ),
+      map((option) => ({ ...option, category: `Recent · ${option.description}` })),
     )
 
     const providerOptions = pipe(
