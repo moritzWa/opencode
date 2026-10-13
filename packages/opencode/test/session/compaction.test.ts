@@ -9,6 +9,7 @@ import * as Stream from "effect/Stream"
 import { Config } from "@/config/config"
 import { LLM } from "../../src/session/llm"
 import { SessionCompaction } from "../../src/session/compaction"
+import { usable } from "../../src/session/overflow"
 import { Token } from "@/util/token"
 import { Plugin } from "../../src/plugin"
 import { provideTmpdirInstance, TestInstance } from "../fixture/fixture"
@@ -509,6 +510,12 @@ describe("session.compaction.isOverflow", () => {
       }),
     ),
   )
+
+  test("caps a reserved buffer that would swallow a small model's window", () => {
+    const cfg = { compaction: { reserved: 100_000 } } satisfies ConfigV1.Info
+    expect(usable({ cfg, model: createModel({ context: 150_000, input: 150_000, output: 8_192 }) })).toBe(112_500)
+    expect(usable({ cfg, model: createModel({ context: 1_000_000, input: 1_000_000, output: 64_000 }) })).toBe(900_000)
+  })
 
   it.live(
     "BUG: asymmetry — limit.input model allows 30K more usage before compaction than equivalent model without it",

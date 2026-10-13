@@ -1086,6 +1086,8 @@ const layer = Layer.effect(
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
+        // True from a finished compaction until the next provider turn completes without overflowing.
+        let compacted = false
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
@@ -1142,7 +1144,10 @@ const layer = Layer.effect(
             }).pipe(Effect.ignore, Effect.forkIn(scope))
 
           const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
-          const task = tasks.pop()
+          // A compaction request that was interrupted or failed never finishes, so it would stay pending and
+          // run ahead of every later prompt on the compaction model, whichever model the user switched to.
+          // Only a compaction on the latest user message is still live; the overflow check queues a fresh one.
+          const task = tasks.findLast((item) => item.type !== "compaction" || item.messageID === lastUser.id)
 
           if (task?.type === "subtask") {
             yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
@@ -1158,10 +1163,12 @@ const layer = Layer.effect(
               overflow: task.overflow,
             })
             if (result === "stop") break
+            compacted = true
             continue
           }
 
           if (
+            !compacted &&
             lastFinished &&
             lastFinished.summary !== true &&
             (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
@@ -1320,6 +1327,20 @@ const layer = Layer.effect(
             }
 
             if (result === "stop") return "break" as const
+            if (result === "compact" && compacted) {
+              // The turn that follows a compaction still overflows, so the fixed prompt (system prompt plus
+              // tool definitions) alone exceeds the usable window. Compacting again cannot shrink it and would
+              // loop forever, billing a provider turn each time.
+              handle.message.error = new SessionV1.ContextOverflowError({
+                message:
+                  "Context still exceeds the model's limit right after compaction. The system prompt and tool definitions are probably too large for this model: pick a model with a larger context window or disable some tools or MCP servers.",
+              }).toObject()
+              handle.message.finish = "error"
+              yield* sessions.updateMessage(handle.message)
+              yield* events.publish(Session.Event.Error, { sessionID, error: handle.message.error })
+              return "break" as const
+            }
+            compacted = false
             if (result === "compact") {
               yield* compaction.create({
                 sessionID,

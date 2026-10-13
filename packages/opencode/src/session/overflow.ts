@@ -6,14 +6,19 @@ import { ProviderTransform } from "@/provider/transform"
 import type { MessageV2 } from "./message-v2"
 
 const COMPACTION_BUFFER = 20_000
+const MAX_RESERVED_RATIO = 0.25
 
 export function usable(input: { cfg: ConfigV1.Info; model: Provider.Model; outputTokenMax?: number }) {
   const context = input.model.limit.context
   if (context === 0) return 0
 
-  const reserved =
+  // An absolute `compaction.reserved` tuned for a large model would otherwise swallow most of a smaller
+  // model's window, so cap it at a quarter of the input limit.
+  const reserved = Math.min(
     input.cfg.compaction?.reserved ??
-    Math.min(COMPACTION_BUFFER, ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax))
+      Math.min(COMPACTION_BUFFER, ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax)),
+    Math.floor((input.model.limit.input || context) * MAX_RESERVED_RATIO),
+  )
   return input.model.limit.input
     ? Math.max(0, input.model.limit.input - reserved)
     : Math.max(0, context - ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax))
