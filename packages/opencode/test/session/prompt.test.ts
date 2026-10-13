@@ -809,7 +809,7 @@ it.instance("compaction retries on the session model when the pinned compaction 
     if (result.info.role === "assistant") {
       expect(result.info.summary).toBe(true)
       expect(result.info.error).toBeUndefined()
-      expect(result.info.modelID).toBe("test-model")
+      expect(result.info.modelID).toBe(ref.modelID)
     }
   }),
 )
