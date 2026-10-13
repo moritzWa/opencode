@@ -931,7 +931,7 @@ describe("ProviderTransform.providerOptions", () => {
     test("adds blockBinding to explicit adaptive thinking on @ai-sdk/anthropic", () => {
       const model = claude("@ai-sdk/anthropic", "claude-fable-5-1")
       expect(ProviderTransform.providerOptions(model, { thinking: { type: "adaptive" }, effort: "high" })).toEqual({
-        anthropic: { thinking: { type: "adaptive", blockBinding: binding }, effort: "high" },
+        anthropic: { thinking: { type: "adaptive", display: "summarized", blockBinding: binding }, effort: "high" },
       })
     })
 
@@ -945,24 +945,25 @@ describe("ProviderTransform.providerOptions", () => {
     sdks.forEach((sdk) => {
       describe(sdk.npm, () => {
         test.each([
-          "claude-fable-5-1",
-          "claude-fable-5.1",
-          "claude-5.1-fable",
-          "global.anthropic.claude-fable-5-1",
-          "us.anthropic.claude-fable-5-1-v1:0",
-          "claude-fable-5-1@default",
-          "CLAUDE-FABLE-5-1",
-          "claude-opus-5-1",
-          "claude-sonnet-5-2",
-          "claude-mythos-5-2",
-          "claude-mythos-5-10",
-          "claude-opus-6",
-          "claude-6-opus",
-          "claude-mythos-6-20270901",
-        ])("adds binding for %s", (id) => {
+          ["claude-fable-5-1", true],
+          ["claude-fable-5.1", true],
+          ["claude-5.1-fable", true],
+          ["global.anthropic.claude-fable-5-1", true],
+          ["us.anthropic.claude-fable-5-1-v1:0", true],
+          ["claude-fable-5-1@default", true],
+          ["CLAUDE-FABLE-5-1", true],
+          ["claude-opus-5-1", false],
+          ["claude-sonnet-5-2", false],
+          ["claude-mythos-5-2", true],
+          ["claude-mythos-5-10", true],
+          ["claude-opus-6", true],
+          ["claude-6-opus", true],
+          ["claude-mythos-6-20270901", true],
+        ] as const)("adds binding for %s", (id, progress) => {
           const model = claude(sdk.npm, id)
+          const display = progress && sdk.key === "anthropic" ? { display: "summarized" } : {}
           expect(ProviderTransform.providerOptions(model, {})).toEqual({
-            [sdk.key]: { [sdk.option]: { type: "adaptive", blockBinding: binding } },
+            [sdk.key]: { [sdk.option]: { type: "adaptive", ...display, blockBinding: binding } },
           })
           expect(
             ProviderTransform.providerOptions(model, { [sdk.option]: { type: "adaptive", display: "summarized" } }),
@@ -980,27 +981,30 @@ describe("ProviderTransform.providerOptions", () => {
         })
 
         test.each([
-          "claude-haiku-4-5",
-          "claude-opus-4-8",
-          "claude-sonnet-4-6",
-          "claude-opus-5",
-          "claude-sonnet-5",
-          "claude-fable-5",
-          "claude-opus-5-0",
-          "claude-opus-5-20260724",
-          "global.anthropic.claude-opus-5",
-          "us.anthropic.claude-opus-5",
-          "claude-sonnet-5@default",
-          "claude-mythos-5-1",
-          "claude-mythos-5.1",
-          "claude-5.1-mythos",
-          "global.anthropic.claude-mythos-5-1-v1:0",
-          "claude-mythos-5-1@default",
-          "CLAUDE-MYTHOS-5-1",
-          "claude-future",
-        ])("leaves thinking unchanged for %s", (id) => {
+          ["claude-haiku-4-5", false],
+          ["claude-opus-4-8", false],
+          ["claude-sonnet-4-6", false],
+          ["claude-opus-5", false],
+          ["claude-sonnet-5", false],
+          ["claude-fable-5", true],
+          ["claude-opus-5-0", false],
+          ["claude-opus-5-20260724", false],
+          ["global.anthropic.claude-opus-5", false],
+          ["us.anthropic.claude-opus-5", false],
+          ["claude-sonnet-5@default", false],
+          ["claude-mythos-5-1", true],
+          ["claude-mythos-5.1", true],
+          ["claude-5.1-mythos", true],
+          ["global.anthropic.claude-mythos-5-1-v1:0", true],
+          ["claude-mythos-5-1@default", true],
+          ["CLAUDE-MYTHOS-5-1", true],
+          ["claude-future", false],
+        ] as const)("leaves thinking binding unchanged for %s", (id, progress) => {
           const model = claude(sdk.npm, id)
-          expect(ProviderTransform.providerOptions(model, {})).toEqual({ [sdk.key]: {} })
+          expect(ProviderTransform.providerOptions(model, {})).toEqual({
+            [sdk.key]:
+              progress && sdk.key === "anthropic" ? { [sdk.option]: { type: "adaptive", display: "summarized" } } : {},
+          })
           expect(
             ProviderTransform.providerOptions(model, { [sdk.option]: { type: "adaptive", display: "summarized" } }),
           ).toEqual({ [sdk.key]: { [sdk.option]: { type: "adaptive", display: "summarized" } } })
@@ -1009,19 +1013,25 @@ describe("ProviderTransform.providerOptions", () => {
           ).toEqual({ [sdk.key]: { [sdk.option]: { type: "enabled", budgetTokens: 4000 } } })
         })
 
-        test.each(["claude-fable-5-1", "claude-opus-5"])("honors explicit binding controls for %s", (id) => {
+        test.each([
+          ["claude-fable-5-1", true],
+          ["claude-opus-5", false],
+        ] as const)("honors explicit binding controls for %s", (id, progress) => {
           const model = claude(sdk.npm, id)
+          const display = progress && sdk.key === "anthropic" ? { display: "summarized" } : {}
           const options = Object.freeze({
             [sdk.option]: Object.freeze({ type: "adaptive", blockBinding: false }),
           })
           expect(ProviderTransform.providerOptions(model, options)).toEqual({
-            [sdk.key]: { [sdk.option]: { type: "adaptive" } },
+            [sdk.key]: { [sdk.option]: { type: "adaptive", ...display } },
           })
           expect(ProviderTransform.providerOptions(model, { [sdk.option]: { blockBinding: false } })).toEqual({
             [sdk.key]: {},
           })
-          const custom = { [sdk.option]: { type: "adaptive", blockBinding: { prefixMismatchBehavior: "error" } } }
-          expect(ProviderTransform.providerOptions(model, custom)).toEqual({ [sdk.key]: custom })
+          const blockBinding = { prefixMismatchBehavior: "error" }
+          expect(
+            ProviderTransform.providerOptions(model, { [sdk.option]: { type: "adaptive", blockBinding } }),
+          ).toEqual({ [sdk.key]: { [sdk.option]: { type: "adaptive", ...display, blockBinding } } })
         })
 
         test.each([
@@ -1095,7 +1105,7 @@ describe("ProviderTransform.providerOptions", () => {
           expect(fields.thinking).toEqual(
             mode === "title"
               ? { type: "enabled", budget_tokens: 16000 }
-              : mode === "high"
+              : mode === "high" || (id === "claude-mythos-5-1" && sdk.key !== "bedrock")
                 ? { type: "adaptive", display: "summarized" }
                 : undefined,
           )
@@ -1118,7 +1128,7 @@ describe("ProviderTransform.providerOptions", () => {
     test("applies to vertex anthropic", () => {
       const model = claude("@ai-sdk/google-vertex/anthropic", "claude-fable-5-1")
       expect(ProviderTransform.providerOptions(model, { thinking: { type: "adaptive" }, effort: "max" })).toEqual({
-        anthropic: { thinking: { type: "adaptive", blockBinding: binding }, effort: "max" },
+        anthropic: { thinking: { type: "adaptive", display: "summarized", blockBinding: binding }, effort: "max" },
       })
     })
 
@@ -1179,6 +1189,7 @@ describe("ProviderTransform.providerOptions", () => {
       })
       expect(sent?.body.thinking).toEqual({
         type: "adaptive",
+        display: "summarized",
         block_binding: { prefix_mismatch_behavior: "drop_block" },
       })
       expect(sent?.headers.get("anthropic-beta")?.split(",")).toContain("thinking-binding-controls-2026-08-01")
@@ -1228,6 +1239,7 @@ describe("ProviderTransform.providerOptions", () => {
       expect(sent?.body.anthropic_version).toBe("vertex-2023-10-16")
       expect(sent?.body.thinking).toEqual({
         type: "adaptive",
+        display: "summarized",
         block_binding: { prefix_mismatch_behavior: "drop_block" },
       })
       expect(sent?.headers.get("anthropic-beta")?.split(",")).toContain("thinking-binding-controls-2026-08-01")

@@ -1677,40 +1677,50 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
   }
 
   return (
-    <Show when={content() || opaque()}>
-      <box
-        ref={(el: BoxRenderable) => alwaysSeparate.add(el)}
-        paddingLeft={3}
-        marginTop={1}
-        flexDirection="column"
-        flexShrink={0}
-      >
-        <box onMouseUp={toggle}>
-          <ReasoningHeader
-            toggleable={inMinimal() && !opaque()}
-            open={!inMinimal() || expanded()}
-            done={isDone()}
-            title={summary().title}
-            duration={isDone() ? Locale.duration(duration()) : undefined}
-            encrypted={opaque()}
-          />
-        </box>
-        <Show when={!opaque() && (!inMinimal() || expanded()) && summary().body}>
-          <box paddingLeft={inMinimal() ? 2 : 0} marginTop={1}>
-            <code
-              filetype="markdown"
-              drawUnstyledText={false}
-              streaming={true}
-              syntaxStyle={syntax()}
-              content={summary().body}
-              conceal={ctx.conceal()}
-              fg={theme.textMuted}
+    <Show when={!progressUpdate(props.part)} fallback={<TextPart {...props} />}>
+      <Show when={content() || opaque()}>
+        <box
+          ref={(el: BoxRenderable) => alwaysSeparate.add(el)}
+          paddingLeft={3}
+          marginTop={1}
+          flexDirection="column"
+          flexShrink={0}
+        >
+          <box onMouseUp={toggle}>
+            <ReasoningHeader
+              toggleable={inMinimal() && !opaque()}
+              open={!inMinimal() || expanded()}
+              done={isDone()}
+              title={summary().title}
+              duration={isDone() ? Locale.duration(duration()) : undefined}
+              encrypted={opaque()}
             />
           </box>
-        </Show>
-      </box>
+          <Show when={!opaque() && (!inMinimal() || expanded()) && summary().body}>
+            <box paddingLeft={inMinimal() ? 2 : 0} marginTop={1}>
+              <code
+                filetype="markdown"
+                drawUnstyledText={false}
+                streaming={true}
+                syntaxStyle={syntax()}
+                content={summary().body}
+                conceal={ctx.conceal()}
+                fg={theme.textMuted}
+              />
+            </box>
+          </Show>
+        </box>
+      </Show>
     </Show>
   )
+}
+
+// Claude 5.5 returns the notes it writes for the user between tool calls as thinking
+// blocks. Anthropic marks them with a "narration" type inside the block's signature.
+function progressUpdate(part: ReasoningPart) {
+  const signature = (part.metadata?.anthropic as { signature?: unknown } | undefined)?.signature
+  if (typeof signature !== "string") return false
+  return Buffer.from(signature.slice(0, 64), "base64").includes("B\tnarration")
 }
 
 function ReasoningHeader(props: {
@@ -1748,7 +1758,7 @@ function ReasoningHeader(props: {
   )
 }
 
-function TextPart(props: { last: boolean; part: TextPart; message: AssistantMessage }) {
+function TextPart(props: { last: boolean; part: TextPart | ReasoningPart; message: AssistantMessage }) {
   const ctx = use()
   const { theme, syntax } = useTheme()
   return (

@@ -700,6 +700,20 @@ function anthropicBindsThinking(apiId: string) {
   return major > 5 || (major === 5 && minor >= 1)
 }
 
+// These models return the notes they write for the user between tool calls as
+// progress-update thinking blocks, which the default "omitted" display empties.
+// https://platform.claude.com/docs/en/build-with-claude/thinking#progress-updates
+function anthropicWritesProgressUpdates(apiId: string) {
+  const version = /claude-(?:([a-z]+)-)?(\d+)(?:[.-](\d{1,2}))?(?:-([a-z]+))?(?:[.@-]|$)/i.exec(apiId)
+  if (!version) return false
+  const family = (version[1] ?? version[4])?.toLowerCase()
+  const major = Number(version[2])
+  const minor = Number(version[3] ?? 0)
+  if (family === "fable") return major >= 5
+  if (family === "mythos") return major > 5 || (major === 5 && minor >= 1)
+  return major > 5 || (major === 5 && minor >= 5)
+}
+
 // Fable 5.1 binds each thinking signature to the system prompt, tool list, and
 // messages above it, and rejects the request when any of that changes. opencode
 // re-renders parts of that prefix between turns (system prompt, tools, compaction),
@@ -736,6 +750,15 @@ function anthropicBlockBinding(model: Provider.Model, options: { [x: string]: an
     }
   }
   return options
+}
+
+// Variants already request summaries; without one, progress updates would come back empty.
+function anthropicProgressUpdates(model: Provider.Model, options: { [x: string]: any }) {
+  if (!["@ai-sdk/anthropic", "@ai-sdk/google-vertex/anthropic"].includes(model.api.npm)) return options
+  if (!model.capabilities.reasoning || !anthropicWritesProgressUpdates(model.api.id)) return options
+  const thinking = options.thinking ?? { type: "adaptive" }
+  if (thinking.type !== "adaptive" || thinking.display !== undefined) return options
+  return { ...options, thinking: { ...thinking, display: "summarized" } }
 }
 
 function isLegacyGemini(apiId: string) {
@@ -1427,7 +1450,7 @@ export function providerOptions(model: Provider.Model, options: { [x: string]: a
     usesOpenAIReasoningGate &&
     (model.capabilities.reasoning || options.reasoningEffort !== undefined || options.reasoningSummary !== undefined)
       ? { ...options, forceReasoning: true }
-      : anthropicBlockBinding(model, options)
+      : anthropicBlockBinding(model, anthropicProgressUpdates(model, options))
 
   if (model.api.npm === "@ai-sdk/gateway") {
     // Gateway providerOptions are split across two namespaces:
