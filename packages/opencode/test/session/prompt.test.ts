@@ -767,6 +767,53 @@ it.instance("loop ignores a stale compaction request left by an interrupted comp
   }),
 )
 
+it.instance("compaction retries on the session model when the pinned compaction model fails", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => {
+      const base = providerCfg(url)
+      return {
+        ...base,
+        provider: {
+          ...base.provider,
+          test: {
+            ...base.provider.test,
+            models: {
+              ...base.provider.test.models,
+              "other-model": { ...base.provider.test.models["test-model"], id: "other-model", name: "Other Model" },
+            },
+          },
+        },
+        agent: { compaction: { model: "test/other-model" } },
+      }
+    })
+    const prompt = yield* SessionPrompt.Service
+    const compaction = yield* SessionCompaction.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    yield* compaction.create({ sessionID: chat.id, agent: "build", model: ref, auto: false })
+    yield* llm.error(400, { error: { message: "The usage limit has been reached" } })
+    yield* llm.push(reply().text("summary of the conversation").stop())
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const hits = yield* llm.hits
+
+    expect(hits.map((hit) => hit.body.model)).toEqual(["other-model", "test-model"])
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.info.summary).toBe(true)
+      expect(result.info.error).toBeUndefined()
+      expect(result.info.modelID).toBe("test-model")
+    }
+  }),
+)
+
 noLLMServer.instance.skip(
   "prompt emits v2 prompted and synthetic events (v2 projector disabled)",
   () =>
