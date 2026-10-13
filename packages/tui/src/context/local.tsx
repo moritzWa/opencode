@@ -1,6 +1,6 @@
-import { createStore } from "solid-js/store"
+import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "./helper"
-import { batch, createEffect, createMemo } from "solid-js"
+import { batch, createEffect, createMemo, on } from "solid-js"
 import { useSync } from "./sync"
 import { useEvent } from "./event"
 import path from "path"
@@ -13,6 +13,7 @@ import { useTheme } from "./theme"
 import { useToast } from "../ui/toast"
 import { useRoute } from "./route"
 import { usePermission } from "./permission"
+import { useTuiConfig } from "../config"
 
 export type LocalTheme = {
   secondary: RGBA
@@ -30,6 +31,14 @@ export function parseModel(model: string) {
     providerID: providerID,
     modelID: rest.join("/"),
   }
+}
+
+export function modelAllowed(allowlist: readonly string[] | undefined, model: { providerID: string; modelID: string }) {
+  if (!allowlist?.length) return true
+  const key = `${model.providerID}/${model.modelID}`
+  return allowlist.some(
+    (pattern) => pattern === "*" || pattern === key || (pattern.endsWith("/*") && key.startsWith(pattern.slice(0, -1))),
+  )
 }
 
 export function recentModels(
@@ -60,6 +69,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const args = useArgs()
     const event = useEvent()
     const permission = usePermission()
+    const tuiConfig = useTuiConfig()
+
+    // Gates only what the prompt selects on its own; the model picker still offers every model.
+    function isModelAllowed(model: { providerID: string; modelID: string }) {
+      return modelAllowed(tuiConfig.model_allowlist, model)
+    }
 
     function isModelValid(model: { providerID: string; modelID: string }) {
       const provider = sync.data.provider.find((item) => item.id === model.providerID)
@@ -216,7 +231,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         }
 
         for (const item of modelStore.recent) {
-          if (isModelValid(item)) {
+          if (isModelValid(item) && isModelAllowed(item)) {
             return item
           }
         }
@@ -246,6 +261,17 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
       return {
         current: currentModel,
+        allowed: isModelAllowed,
+        // Forget a picked model that is outside the allowlist so it does not follow the user into other chats.
+        dropDisallowed() {
+          const names = Object.keys(modelStore.model).filter((name) => !isModelAllowed(modelStore.model[name]))
+          if (!names.length) return
+          setModelStore(
+            produce((draft) => {
+              names.forEach((name) => delete draft.model[name])
+            }),
+          )
+        },
         get ready() {
           return modelStore.ready
         },
@@ -275,7 +301,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         cycle(direction: 1 | -1) {
           const current = currentModel()
           if (!current) return
-          const recent = modelStore.recent
+          const recent = modelStore.recent.filter(isModelAllowed)
           const index = recent.findIndex((x) => x.providerID === current.providerID && x.modelID === current.modelID)
           if (index === -1) return
           let next = index + direction
@@ -288,7 +314,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           setModelStore("model", a.name, { ...val })
         },
         cycleFavorite(direction: 1 | -1) {
-          const favorites = modelStore.favorite.filter((item) => isModelValid(item))
+          const favorites = modelStore.favorite.filter((item) => isModelValid(item) && isModelAllowed(item))
           if (!favorites.length) {
             toast.show({
               variant: "info",
@@ -407,6 +433,18 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     }
 
     const model = createModel()
+
+    // Leaving a chat for another chat or the home screen ends a pick that is outside the allowlist.
+    // Home to a new chat keeps it, so the chat created with that pick can continue on it.
+    createEffect(
+      on(
+        () => (route.data.type === "session" ? route.data.sessionID : undefined),
+        (sessionID, previous) => {
+          if (previous && previous !== sessionID) model.dropDisallowed()
+        },
+        { defer: true },
+      ),
+    )
 
     function createSession() {
       const [sessionStore, setSessionStore] = createStore<{

@@ -311,7 +311,13 @@ export function Prompt(props: PromptProps) {
       if (msg.agent && isPrimaryAgent) {
         // Keep command line --agent if specified.
         if (!args.agent) local.agent.set(msg.agent)
-        if (msg.model) {
+        if (msg.model && !local.model.allowed(msg.model))
+          toast.show({
+            variant: "info",
+            message: `This chat last used ${msg.model.providerID}/${msg.model.modelID}, which is not in model_allowlist. Pick it in the model list to use it.`,
+            duration: 5000,
+          })
+        else if (msg.model) {
           local.model.set(msg.model)
           local.model.variant.set(msg.model.variant)
         }

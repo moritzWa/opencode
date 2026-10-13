@@ -72,6 +72,10 @@ export const Info = Schema.Struct({
   diff_style: Schema.optional(DiffStyle),
   cursor: Schema.optional(Cursor),
   mouse: Schema.optional(Schema.Boolean).annotate({ description: "Enable or disable mouse capture (default: true)" }),
+  model_allowlist: Schema.optional(Schema.Array(Schema.String)).annotate({
+    description:
+      "Models the prompt may select on its own (restoring a chat's model, recent-model fallback, cycling). Entries are 'provider/model', 'provider/*' or '*'. Models outside the list stay available in the model picker.",
+  }),
 })
 export type Info = Schema.Schema.Type<typeof Info>
 
