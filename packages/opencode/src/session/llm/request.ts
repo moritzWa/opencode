@@ -33,6 +33,8 @@ type PrepareInput = {
   readonly plugin: Plugin.Interface
   readonly flags: RuntimeFlags.Info
   readonly isWorkflow: boolean
+  /** Reuse the session's first system prompt instead of rebuilding it from live files on every call. */
+  readonly freezeSystem?: boolean
 }
 
 export type Prepared = {
@@ -76,6 +78,9 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     system.length = 0
     system.push(header, rest.join("\n"))
   }
+  const frozen = input.freezeSystem && !input.small && !input.isWorkflow ? freezeSystem(input, system) : undefined
+  if (frozen) system.splice(0, system.length, ...frozen.system)
+  const history = frozen?.extra ? [...input.messages, { role: "user" as const, content: frozen.extra }] : input.messages
 
   const variant =
     !input.small && input.model.variants && input.user.model.variant
@@ -100,7 +105,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
 
   const messages =
     isOpenaiOauth || input.isWorkflow
-      ? input.messages
+      ? history
       : [
           ...system.map(
             (x): ModelMessage => ({
@@ -108,7 +113,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
               content: x,
             }),
           ),
-          ...input.messages,
+          ...history,
         ]
 
   const params = yield* input.plugin.trigger(
@@ -213,6 +218,37 @@ function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission"
     Permission.merge(input.agent.permission, input.permission ?? []),
   )
   return Record.filter(input.tools, (_, k) => input.user.tools?.[k] !== false && !disabled.has(k))
+}
+
+// The system prompt is rebuilt from live files (instructions, skills, memory index) on every
+// call, and providers cache it as the start of the prompt, so any edit by another session
+// invalidates the cached conversation. A session keeps its first system prompt until its history
+// is rewritten anyway: compaction replaces the first message, which changes the key.
+const frozenSystems = new Map<string, string[]>()
+const MAX_FROZEN_SYSTEMS = 500
+
+function freezeSystem(input: PrepareInput, system: string[]) {
+  const key = [
+    input.sessionID,
+    input.agent.name,
+    `${input.model.providerID}/${input.model.id}`,
+    Bun.hash(JSON.stringify(input.messages[0] ?? null)).toString(),
+  ].join("\u0000")
+  const frozen = frozenSystems.get(key)
+  frozenSystems.delete(key)
+  if (!frozen || frozen.length !== system.length) {
+    frozenSystems.set(key, [...system])
+    if (frozenSystems.size > MAX_FROZEN_SYSTEMS) frozenSystems.delete(frozenSystems.keys().next().value!)
+    return { system: [...system], extra: undefined }
+  }
+  frozenSystems.set(key, frozen)
+  // Plugins may append per-turn context (memory recall) to a system entry. Deliver only text
+  // appended on new lines, after the cached history, so the frozen prefix stays byte-identical.
+  const extra = system
+    .flatMap((entry, i) => (entry.startsWith(frozen[i] + "\n") ? [entry.slice(frozen[i].length).trim()] : []))
+    .filter(Boolean)
+    .join("\n\n")
+  return { system: [...frozen], extra: extra || undefined }
 }
 
 export function hasToolCalls(messages: ModelMessage[]): boolean {

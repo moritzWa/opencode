@@ -189,6 +189,10 @@ export const Info = Schema.Struct({
       mcp_lazy_exclude_providers: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
         description: "Provider IDs that keep receiving every MCP tool definition when mcp_lazy is enabled",
       }),
+      freeze_system_prompt: Schema.optional(Schema.Boolean).annotate({
+        description:
+          "Keep each session's first system prompt until compaction instead of rebuilding it on every call, so instruction or memory edits from other sessions do not invalidate the prompt cache",
+      }),
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",
       }),

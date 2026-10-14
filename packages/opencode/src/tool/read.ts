@@ -59,6 +59,7 @@ type Metadata = {
   truncated: boolean
   loaded: string[]
   display?: Display
+  contentHash?: string
 }
 
 export const ReadTool = Tool.define<
@@ -335,12 +336,43 @@ export const ReadTool = Tool.define<
         )
       }
 
-      let output = [`<path>${filepath}</path>`, `<type>file</type>`, "<content>\n"].join("\n")
-      output += file.raw.map((line, i) => `${i + file.offset}: ${line}`).join("\n")
-
       const last = file.offset + file.raw.length - 1
       const next = last + 1
       const truncated = file.more || file.cut
+      const contentHash = Bun.hash(`${filepath}\u0000${file.offset}\u0000${file.raw.join("\n")}`).toString()
+      const display = {
+        type: "file" as const,
+        path: filepath,
+        text: file.raw.join("\n"),
+        lineStart: file.offset,
+        lineEnd: last,
+        totalLines: file.count,
+        truncated,
+      }
+
+      // Re-reading an unchanged range only repeats tokens the model already has: every later request
+      // resends both copies. Only skip when the earlier output is still in the current context.
+      const seen = ctx.messages.some((message) =>
+        message.parts.some(
+          (part) =>
+            part.type === "tool" &&
+            part.tool === "read" &&
+            part.state.status === "completed" &&
+            !part.state.time.compacted &&
+            part.state.metadata?.contentHash === contentHash,
+        ),
+      )
+      if (seen) {
+        yield* warm(filepath)
+        return {
+          title,
+          output: `<path>${filepath}</path>\nLines ${file.offset}-${last} are unchanged since you read them earlier in this conversation. Use that earlier output; it is still current.`,
+          metadata: { preview: "", truncated, loaded: [], display, contentHash },
+        }
+      }
+
+      let output = [`<path>${filepath}</path>`, `<type>file</type>`, "<content>\n"].join("\n")
+      output += file.raw.map((line, i) => `${i + file.offset}: ${line}`).join("\n")
       if (file.cut) {
         output += `\n\n(Output capped at ${MAX_BYTES_LABEL}. Showing lines ${file.offset}-${last}. Use offset=${next} to continue.)`
       } else if (file.more) {
@@ -363,15 +395,8 @@ export const ReadTool = Tool.define<
           preview: file.raw.slice(0, 20).join("\n"),
           truncated,
           loaded: loaded.map((item) => item.filepath),
-          display: {
-            type: "file" as const,
-            path: filepath,
-            text: file.raw.join("\n"),
-            lineStart: file.offset,
-            lineEnd: last,
-            totalLines: file.count,
-            truncated,
-          },
+          display,
+          contentHash,
         },
       }
     })

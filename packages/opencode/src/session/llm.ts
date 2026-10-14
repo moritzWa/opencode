@@ -110,6 +110,7 @@ const live: Layer.Layer<
         plugin,
         flags,
         isWorkflow,
+        freezeSystem: cfg.experimental?.freeze_system_prompt === true,
       })
 
       // Wire up toolExecutor for DWS workflow models so that tool calls

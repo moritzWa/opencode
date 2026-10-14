@@ -376,6 +376,46 @@ describe("tool.read truncation", () => {
     }),
   )
 
+  it.instance("returns a short stub when the same unchanged range is already in context", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const filePath = path.join(test.directory, "repeat.txt")
+      yield* put(filePath, "alpha\nbeta")
+      const first = yield* run({ filePath })
+      const history = (compacted?: number) =>
+        [
+          {
+            info: { id: "msg_earlier", role: "assistant" },
+            parts: [
+              {
+                type: "tool",
+                tool: "read",
+                state: {
+                  status: "completed",
+                  input: { filePath },
+                  output: first.output,
+                  title: "",
+                  metadata: first.metadata,
+                  time: { start: 1, end: 2, ...(compacted ? { compacted } : {}) },
+                },
+              },
+            ],
+          },
+        ] as unknown as Tool.Context["messages"]
+
+      const repeat = yield* run({ filePath }, { ...ctx, messages: history() })
+      expect(repeat.output).toContain("unchanged since you read them earlier")
+      expect(repeat.output).not.toContain("alpha")
+
+      const pruned = yield* run({ filePath }, { ...ctx, messages: history(3) })
+      expect(pruned.output).toContain("alpha")
+
+      yield* put(filePath, "alpha\nbeta changed")
+      const changed = yield* run({ filePath }, { ...ctx, messages: history() })
+      expect(changed.output).toContain("beta changed")
+    }),
+  )
+
   it.instance("does not truncate small file", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
