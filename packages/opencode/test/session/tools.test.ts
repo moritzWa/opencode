@@ -215,7 +215,8 @@ it.effect("lazy MCP mode replaces MCP tool definitions with mcp_search and mcp_c
     expect(tools.mcp_search.description).toContain("- gmail: search_emails, send_email")
     expect(tools.mcp_search.description).toContain("- google-calendar: list-events")
 
-    const search = yield* Effect.promise(() => tools.mcp_search.execute!({ query: "send email" }, options))
+    type Output = { output: string; title: string; metadata: { matches: string[] } }
+    const search = (yield* Effect.promise(() => tools.mcp_search.execute!({ query: "send email" }, options))) as Output
     expect(search.output).toContain("## gmail_send_email")
     expect(search.output).toContain('"required":["to"]')
     expect(search.metadata.matches[0]).toBe("gmail_send_email")
