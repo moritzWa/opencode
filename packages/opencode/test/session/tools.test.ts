@@ -221,9 +221,9 @@ it.effect("lazy MCP mode replaces MCP tool definitions with mcp_search and mcp_c
     expect(search.output).toContain('"required":["to"]')
     expect(search.metadata.matches[0]).toBe("gmail_send_email")
 
-    const result = yield* Effect.promise(() =>
+    const result = (yield* Effect.promise(() =>
       tools.mcp_call.execute!({ tool: "gmail_send_email", arguments: '{"to":"a@b.c"}' }, options),
-    )
+    )) as Output
     expect(result.output).toBe("sent")
     expect(result.title).toBe("gmail_send_email")
     expect(calls).toEqual([{ name: "send_email", arguments: { to: "a@b.c" } }])
