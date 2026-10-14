@@ -46,6 +46,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   bypassAgentCheck: boolean
   messages: SessionV1.WithParts[]
   promptOps: TaskPromptOps
+  /** Replace MCP tool definitions with mcp_search and mcp_call. */
+  mcpLazy?: boolean
 }) {
   const tools: Record<string, AITool> = {}
   const run = yield* EffectBridge.make()
@@ -390,15 +392,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
 
   if (flags.experimentalCodeMode) return tools
 
-  for (const [key, entry] of Object.entries(yield* mcp.tools())) {
-    const item = McpCatalog.convertTool(entry.def, entry.client, entry.timeout)
-    const execute = item.execute
-    if (!execute) continue
-
-    const schema = yield* Effect.promise(() => Promise.resolve(asSchema(item.inputSchema).jsonSchema))
-    const transformed = ProviderTransform.schema(input.model, { ...schema, properties: schema.properties ?? {} })
-    item.inputSchema = jsonSchema(transformed)
-    item.execute = (args, opts) =>
+  const executeMcp =
+    (key: string, execute: NonNullable<AITool["execute"]>, title = "") =>
+    (args: Record<string, unknown>, opts: ToolExecutionOptions) =>
       run.promise(
         Effect.gen(function* () {
           const ctx = context(args, opts)
@@ -472,7 +468,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           }
 
           const output = {
-            title: "",
+            title,
             metadata,
             output: truncated.content,
             attachments: attachments.map((attachment) => ({
@@ -489,11 +485,156 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           return output
         }),
       )
-    tools[key] = item
+
+  if (!input.mcpLazy) {
+    for (const [key, entry] of Object.entries(yield* mcp.tools())) {
+      const item = McpCatalog.convertTool(entry.def, entry.client, entry.timeout)
+      const execute = item.execute
+      if (!execute) continue
+
+      const schema = yield* Effect.promise(() => Promise.resolve(asSchema(item.inputSchema).jsonSchema))
+      const transformed = ProviderTransform.schema(input.model, { ...schema, properties: schema.properties ?? {} })
+      item.inputSchema = jsonSchema(transformed)
+      item.execute = executeMcp(key, execute)
+      tools[key] = item
+    }
+    return tools
   }
+
+  // Lazy mode keeps MCP schemas out of every request: the model sees the tool names in the
+  // mcp_search description and loads a schema only when it needs one. The tool list stays
+  // identical for the whole session, so provider prompt caches are not invalidated.
+  const visible = Permission.visibleTools(
+    yield* mcp.tools(),
+    Permission.merge(input.agent.permission, input.session.permission ?? []),
+  )
+  if (Object.keys(visible).length === 0) return tools
+  const servers = Object.keys(yield* mcp.clients())
+    .map(McpCatalog.sanitize)
+    .toSorted((a, b) => b.length - a.length)
+  const catalog = Object.keys(visible)
+    .toSorted((a, b) => a.localeCompare(b))
+    .map((key) => {
+      const server = servers.find((name) => key.startsWith(name + "_")) ?? key.split("_")[0]!
+      return { key, server, local: key.slice(server.length + 1) || key, tool: visible[key]! }
+    })
+  const byServer = Map.groupBy(catalog, (entry) => entry.server)
+
+  tools[MCP_LAZY_TOOLS.search] = tool({
+    description: [
+      `Search the tools of connected MCP servers and load their input schemas. MCP tool schemas are not sent up front: find the tool here first, then run it with ${MCP_LAZY_TOOLS.call}.`,
+      "Search by keywords, a server name, or an exact tool name. Results include each tool's full description and JSON input schema.",
+      "",
+      "Available MCP tools by server (call them by their full name, server_tool):",
+      ...[...byServer.entries()].map(
+        ([server, entries]) => `- ${server}: ${entries.map((entry) => entry.local).join(", ")}`,
+      ),
+    ].join("\n"),
+    inputSchema: jsonSchema(
+      ProviderTransform.schema(input.model, {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description:
+              "Keywords, an exact tool name such as gmail_search_emails, or several names separated by spaces.",
+          },
+          server: { type: "string", description: "Optional MCP server name to restrict the search to." },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      }),
+    ),
+    execute(args, opts) {
+      return run.promise(
+        Effect.gen(function* () {
+          const query = requiredString(toRecord(args), "query")
+          const server = optionalString(toRecord(args), "server")
+          const terms = query
+            .toLowerCase()
+            .split(/[\s,]+/)
+            .filter(Boolean)
+          const pool = catalog.filter((entry) => !server || entry.server === server)
+          const exact = pool.filter((entry) => terms.includes(entry.key.toLowerCase()))
+          const ranked =
+            exact.length > 0
+              ? exact
+              : pool
+                  .map((entry) => ({ entry, score: scoreMcpTool(entry, terms) }))
+                  .filter((item) => item.score > 0)
+                  .toSorted((a, b) => b.score - a.score)
+                  .slice(0, MCP_SEARCH_LIMIT)
+                  .map((item) => item.entry)
+          const content =
+            ranked.length > 0
+              ? ranked
+                  .map((entry) =>
+                    [
+                      `## ${entry.key}`,
+                      entry.tool.def.description ?? "",
+                      `Input schema: ${JSON.stringify(entry.tool.def.inputSchema)}`,
+                    ].join("\n"),
+                  )
+                  .join("\n\n")
+              : `No MCP tools matched "${query}"${server ? ` on server ${server}` : ""}. Servers: ${[...byServer.keys()].join(", ")}`
+          const truncated = yield* truncate.output(content, {}, input.agent)
+          const output = {
+            title: `MCP search: ${query}`,
+            metadata: {
+              matches: ranked.map((entry) => entry.key),
+              truncated: truncated.truncated,
+              ...(truncated.truncated && { outputPath: truncated.outputPath }),
+            },
+            output: truncated.content,
+          }
+          if (opts.abortSignal?.aborted) yield* input.processor.completeToolCall(opts.toolCallId, output)
+          return output
+        }),
+      )
+    },
+  })
+
+  tools[MCP_LAZY_TOOLS.call] = tool({
+    description: `Run an MCP tool. Pass its full name exactly as listed by ${MCP_LAZY_TOOLS.search} (for example gmail_search_emails) and its arguments as an object matching the input schema ${MCP_LAZY_TOOLS.search} returned. Load the schema with ${MCP_LAZY_TOOLS.search} before the first call to a tool.`,
+    inputSchema: jsonSchema(
+      ProviderTransform.schema(input.model, {
+        type: "object",
+        properties: {
+          tool: { type: "string", description: "Full MCP tool name, server_tool." },
+          arguments: { type: "object", description: "Arguments for the MCP tool.", additionalProperties: true },
+        },
+        required: ["tool"],
+        additionalProperties: false,
+      }),
+    ),
+    async execute(args, opts) {
+      const record = toRecord(args)
+      const name = requiredString(record, "tool")
+      const entry = catalog.find((item) => item.key === name || `${item.server}.${item.local}` === name)
+      if (!entry) throw new Error(`Unknown MCP tool "${name}". Use ${MCP_LAZY_TOOLS.search} to find tool names.`)
+      const execute = McpCatalog.convertTool(entry.tool.def, entry.tool.client, entry.tool.timeout).execute!
+      return executeMcp(entry.key, execute, entry.key)(parseMcpArguments(record.arguments), opts)
+    },
+  })
 
   return tools
 })
+
+const MCP_LAZY_TOOLS = { search: "mcp_search", call: "mcp_call" } as const
+const MCP_SEARCH_LIMIT = 8
+
+function scoreMcpTool(entry: { key: string; tool: MCP.McpTool }, terms: string[]) {
+  const name = entry.key.toLowerCase()
+  const description = (entry.tool.def.description ?? "").toLowerCase()
+  return terms.reduce((score, term) => score + (name.includes(term) ? 3 : 0) + (description.includes(term) ? 1 : 0), 0)
+}
+
+// Some models send the arguments object as a JSON string.
+function parseMcpArguments(value: unknown) {
+  if (typeof value !== "string") return toRecord(value)
+  const parsed: unknown = JSON.parse(value)
+  return toRecord(parsed)
+}
 
 function toRecord(value: unknown) {
   if (isRecord(value)) return value

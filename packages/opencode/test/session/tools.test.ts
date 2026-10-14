@@ -165,3 +165,73 @@ it.effect("preserves running tool start time across metadata updates", () =>
     }
   }),
 )
+
+it.effect("lazy MCP mode replaces MCP tool definitions with mcp_search and mcp_call", () =>
+  Effect.gen(function* () {
+    const calls: unknown[] = []
+    const client = {
+      callTool: async (request: unknown) => {
+        calls.push(request)
+        return { content: [{ type: "text", text: "sent" }] }
+      },
+      getServerCapabilities: () => ({}),
+    } as unknown as MCP.McpTool["client"]
+    const mcpTool = (name: string, description: string): MCP.McpTool => ({
+      def: {
+        name,
+        description,
+        inputSchema: { type: "object", properties: { to: { type: "string" } }, required: ["to"] },
+      },
+      client,
+    })
+    const mcp = MCP.Service.of({
+      tools: () =>
+        Effect.succeed({
+          gmail_send_email: mcpTool("send_email", "Send an email"),
+          gmail_search_emails: mcpTool("search_emails", "Search the inbox"),
+          "google-calendar_list-events": mcpTool("list-events", "List calendar events"),
+        }),
+      clients: () => Effect.succeed({ gmail: client, "google-calendar": client }),
+    } as Partial<MCP.Interface> as MCP.Interface)
+    const processor = {
+      message: { id: messageID, sessionID } as SessionV1.Assistant,
+      updateToolCall: () => Effect.die("unused"),
+      completeToolCall: () => Effect.void,
+    } satisfies Pick<SessionProcessor.Handle, "message" | "updateToolCall" | "completeToolCall">
+    const options = { toolCallId: callID, abortSignal: new AbortController().signal, messages: [] }
+
+    const tools = yield* SessionTools.resolve({
+      agent,
+      model,
+      session: { id: sessionID, permission: [] } as unknown as Session.Info,
+      processor,
+      bypassAgentCheck: false,
+      messages: [],
+      promptOps: {} as never,
+      mcpLazy: true,
+    }).pipe(Effect.provideService(MCP.Service, mcp))
+
+    expect(Object.keys(tools).filter((key) => key.startsWith("gmail") || key.startsWith("google"))).toEqual([])
+    expect(tools.mcp_search.description).toContain("- gmail: search_emails, send_email")
+    expect(tools.mcp_search.description).toContain("- google-calendar: list-events")
+
+    const search = yield* Effect.promise(() => tools.mcp_search.execute!({ query: "send email" }, options))
+    expect(search.output).toContain("## gmail_send_email")
+    expect(search.output).toContain('"required":["to"]')
+    expect(search.metadata.matches[0]).toBe("gmail_send_email")
+
+    const result = yield* Effect.promise(() =>
+      tools.mcp_call.execute!({ tool: "gmail_send_email", arguments: '{"to":"a@b.c"}' }, options),
+    )
+    expect(result.output).toBe("sent")
+    expect(result.title).toBe("gmail_send_email")
+    expect(calls).toEqual([{ name: "send_email", arguments: { to: "a@b.c" } }])
+
+    yield* Effect.promise(() =>
+      Promise.resolve(tools.mcp_call.execute!({ tool: "gmail_missing", arguments: {} }, options)).then(
+        () => expect.unreachable(),
+        (error: Error) => expect(error.message).toContain("Unknown MCP tool"),
+      ),
+    )
+  }),
+)

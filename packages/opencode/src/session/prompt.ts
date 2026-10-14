@@ -1232,6 +1232,7 @@ const layer = Layer.effect(
             const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
             const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
             const promptOps = yield* ops()
+            const experimental = (yield* config.get()).experimental
 
             const tools = yield* SessionTools.resolve({
               agent,
@@ -1241,6 +1242,9 @@ const layer = Layer.effect(
               bypassAgentCheck,
               messages: msgs,
               promptOps,
+              mcpLazy:
+                experimental?.mcp_lazy === true &&
+                !(experimental.mcp_lazy_exclude_providers ?? []).includes(model.providerID),
             }).pipe(
               Effect.provideService(Plugin.Service, plugin),
               Effect.provideService(Permission.Service, permission),

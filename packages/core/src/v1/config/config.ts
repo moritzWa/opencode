@@ -182,6 +182,13 @@ export const Info = Schema.Struct({
       mcp_timeout: Schema.optional(PositiveInt).annotate({
         description: "Timeout in milliseconds for model context protocol (MCP) requests",
       }),
+      mcp_lazy: Schema.optional(Schema.Boolean).annotate({
+        description:
+          "Send mcp_search and mcp_call instead of every MCP tool definition, so MCP tool schemas load on demand",
+      }),
+      mcp_lazy_exclude_providers: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
+        description: "Provider IDs that keep receiving every MCP tool definition when mcp_lazy is enabled",
+      }),
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",
       }),
