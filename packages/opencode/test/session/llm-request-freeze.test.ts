@@ -56,14 +56,56 @@ test("freezeSystem keeps the first system prompt when live inputs change", async
   expect(second.messages.at(-1)).toEqual({ role: "assistant", content: "ok" })
 })
 
-test("freezeSystem passes appended per-turn context after the history", async () => {
+test("freezeSystem folds recalled context into the real user message", async () => {
   memory.section = "## MEMORY.md\n- note A"
   const first = await prepare("ses_recall", history)
   memory.section = "## MEMORY.md\n- note A\n\n## Recalled memories\nremember this"
   const second = await prepare("ses_recall", history)
 
   expect(second.system).toEqual(first.system)
-  expect(second.messages.at(-1)).toEqual({ role: "user", content: "## Recalled memories\nremember this" })
+  expect(second.messages.at(-1)).toEqual({
+    role: "user",
+    content: [
+      { type: "text", text: "first message" },
+      { type: "text", text: "<system-reminder>\n## Recalled memories\nremember this\n</system-reminder>" },
+    ],
+  })
+})
+
+test("shared index appends never replace the real user query", async () => {
+  memory.section = "## MEMORY.md\n- note A"
+  const first = await prepare("ses_index_append", history)
+  memory.section += "\n- unrelated roommate memory"
+  const messages: ModelMessage[] = [...history, { role: "assistant", content: "ok" }, { role: "user", content: "say ABC" }]
+  const second = await prepare("ses_index_append", messages)
+  expect(second.system).toEqual(first.system)
+  expect(second.messages.filter((message) => message.role !== "system")).toEqual(
+    messages.filter((message) => message.role !== "system"),
+  )
+  expect(second.messages.findLast((message) => message.role === "user")?.content).toBe("say ABC")
+})
+
+test("recall preserves multipart input and trailing tool results", async () => {
+  memory.section = "## MEMORY.md\n- note A"
+  await prepare("ses_recall_tools", history)
+  memory.section += "\n- unrelated index append\n\n## Recalled Memories\nrelevant context"
+  const messages: ModelMessage[] = [
+    ...history,
+    { role: "user", content: [{ type: "text", text: "actual query" }] },
+    { role: "assistant", content: [{ type: "tool-call", toolCallId: "call", toolName: "read", input: {} }] },
+    {
+      role: "tool",
+      content: [{ type: "tool-result", toolCallId: "call", toolName: "read", output: { type: "text", value: "result" } }],
+    },
+  ]
+  const result = await prepare("ses_recall_tools", messages)
+  const actual = result.messages.filter((message) => message.role !== "system")
+  expect(actual).toHaveLength(messages.length)
+  expect(actual.slice(-2)).toEqual(messages.filter((message) => message.role !== "system").slice(-2))
+  expect(JSON.stringify(actual[1])).toContain("actual query")
+  expect(JSON.stringify(actual[1])).toContain("relevant context")
+  expect(JSON.stringify(actual)).not.toContain("unrelated index append")
+  expect(messages[1]).toEqual({ role: "user", content: [{ type: "text", text: "actual query" }] })
 })
 
 test("freezeSystem refreshes after compaction replaces the first message", async () => {

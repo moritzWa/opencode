@@ -80,7 +80,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   }
   const frozen = input.freezeSystem && !input.small && !input.isWorkflow ? freezeSystem(input, system) : undefined
   if (frozen) system.splice(0, system.length, ...frozen.system)
-  const history = frozen?.extra ? [...input.messages, { role: "user" as const, content: frozen.extra }] : input.messages
+  const history = frozen?.extra ? withExtra(input.messages, frozen.extra) : input.messages
 
   const variant =
     !input.small && input.model.variants && input.user.model.variant
@@ -242,13 +242,32 @@ function freezeSystem(input: PrepareInput, system: string[]) {
     return { system: [...system], extra: undefined }
   }
   frozenSystems.set(key, frozen)
-  // Plugins may append per-turn context (memory recall) to a system entry. Deliver only text
-  // appended on new lines, after the cached history, so the frozen prefix stays byte-identical.
+  // Only an explicit recall section is per-turn context. A shared MEMORY.md index
+  // append must stay frozen out rather than masquerading as a new user message.
   const extra = system
     .flatMap((entry, i) => (entry.startsWith(frozen[i] + "\n") ? [entry.slice(frozen[i].length).trim()] : []))
-    .filter(Boolean)
+    .flatMap((appended) => {
+      const match = /^## Recalled Memories\s*$/im.exec(appended)
+      return match ? [appended.slice(match.index)] : []
+    })
     .join("\n\n")
   return { system: [...frozen], extra: extra || undefined }
+}
+
+// Cursor selects the last user message as the query. A synthetic trailing user turn
+// would hide the real query and separate tool calls from their results.
+function withExtra(messages: ModelMessage[], extra: string): ModelMessage[] {
+  const index = messages.findLastIndex((message) => message.role === "user")
+  return messages.map((message, i) => {
+    if (i !== index || message.role !== "user") return message
+    return {
+      ...message,
+      content: [
+        ...(typeof message.content === "string" ? [{ type: "text" as const, text: message.content }] : message.content),
+        { type: "text" as const, text: `<system-reminder>\n${extra}\n</system-reminder>` },
+      ],
+    }
+  })
 }
 
 export function hasToolCalls(messages: ModelMessage[]): boolean {
