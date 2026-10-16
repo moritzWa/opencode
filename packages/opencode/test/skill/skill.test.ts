@@ -64,6 +64,72 @@ const withHome = <A, E, R>(home: string, self: Effect.Effect<A, E, R>) =>
   )
 
 describe("skill", () => {
+  it.live("rescans a cached miss after a skill is created or repaired", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const skill = yield* Skill.Service
+          expect(yield* skill.get("account-delegation")).toBeUndefined()
+          const file = path.join(dir, ".opencode", "skills", "account-delegation", "SKILL.md")
+          yield* Effect.promise(() =>
+            Bun.write(file, "---\nname: account-delegation\ndescription: 123\n---\nInstructions"),
+          )
+          const missing = yield* skill.require("account-delegation").pipe(Effect.flip)
+          expect(missing.message).toContain(file)
+          expect(missing.message).toContain("Invalid description")
+          yield* Effect.promise(() =>
+            Bun.write(file, `---\nname: account-delegation\ndescription: ${"x".repeat(1066)}\n---\nInstructions`),
+          )
+          // Both discovery and loaded state were cached before the file was repaired.
+          expect(yield* skill.get("account-delegation")).toBeUndefined()
+          const loaded = yield* skill.require("account-delegation")
+          expect(loaded.description?.length).toBe(1066)
+          expect(loaded.location).toBe(file)
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live("diagnoses invalid, unadvertised and shadowed skills with deterministic precedence", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const files = [
+            [".claude/skills/duplicate/SKILL.md", "name: duplicate\ndescription: External"],
+            [".opencode/skills/duplicate/SKILL.md", "name: duplicate\ndescription: Project"],
+            [".opencode/skills/no-name/SKILL.md", "description: Missing name"],
+            [".opencode/skills/manual/SKILL.md", "name: manual"],
+            [".opencode/skills/broken/SKILL.md", "name: [invalid"],
+            [".claude/skills/.trash/deleted/SKILL.md", "name: deleted\ndescription: Deleted"],
+          ]
+          yield* Effect.promise(() =>
+            Promise.all(files.map(([file, data]) => Bun.write(path.join(dir, file), `---\n${data}\n---\nBody`))),
+          )
+          const skill = yield* Skill.Service
+          expect((yield* skill.require("duplicate")).description).toBe("Project")
+          expect(yield* skill.get("deleted")).toBeUndefined()
+          const report = yield* skill.diagnostics()
+          expect(report.find((item) => item.location.endsWith("no-name/SKILL.md"))).toMatchObject({
+            status: "skipped",
+            reason: expect.stringContaining("name"),
+          })
+          expect(report.find((item) => item.location.endsWith("broken/SKILL.md"))).toMatchObject({
+            status: "skipped",
+            reason: expect.any(String),
+          })
+          expect(report.find((item) => item.name === "manual")).toMatchObject({
+            status: "unadvertised",
+            reason: expect.stringContaining("description"),
+          })
+          expect(report.find((item) => item.status === "shadowed")).toMatchObject({
+            name: "duplicate",
+            reason: expect.stringContaining(".opencode/skills/duplicate/SKILL.md"),
+          })
+        }),
+      { git: true },
+    ),
+  )
+
   it.effect("formats verbose locations as XML-safe filesystem paths", () =>
     Effect.sync(() => {
       const output = Skill.fmt(

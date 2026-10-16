@@ -10,6 +10,7 @@ import { SkillPlugin } from "@opencode-ai/core/plugin/skill"
 import { Permission } from "@/permission"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Config } from "@/config/config"
+import { ConfigPaths } from "@/config/paths"
 import { FrontmatterError } from "@opencode-ai/core/v1/config/error"
 import { ConfigMarkdown } from "@/config/markdown"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -73,15 +74,24 @@ export class NameMismatchError extends Schema.TaggedErrorClass<NameMismatchError
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Skill.NotFoundError", {
   name: Schema.String,
   available: Schema.Array(Schema.String),
+  diagnostics: Schema.optional(Schema.String),
 }) {
   override get message() {
-    return `Skill "${this.name}" not found. Available skills: ${this.available.join(", ") || "none"}`
+    return `Skill "${this.name}" not found. Rescanned disk. Available skills: ${this.available.join(", ") || "none"}. ${this.diagnostics ?? "Run opencode debug skill --diagnostics to inspect discovered files and skip reasons."}`
   }
 }
 
 type State = {
   skills: Record<string, Info>
   dirs: Set<string>
+  diagnostics: Diagnostic[]
+}
+
+export type Diagnostic = {
+  location: string
+  name?: string
+  status: "loaded" | "skipped" | "shadowed" | "unadvertised"
+  reason?: string
 }
 
 type DiscoveryState = {
@@ -100,6 +110,7 @@ export interface Interface {
   readonly all: () => Effect.Effect<Info[]>
   readonly dirs: () => Effect.Effect<string[]>
   readonly available: (agent?: Agent.Info) => Effect.Effect<Info[]>
+  readonly diagnostics: () => Effect.Effect<Diagnostic[]>
 }
 
 const add = Effect.fnUntraced(function* (state: State, match: string, events: EventV2Bridge.Service["Service"]) {
@@ -109,7 +120,9 @@ const add = Effect.fnUntraced(function* (state: State, match: string, events: Ev
   }).pipe(
     Effect.catch(
       Effect.fnUntraced(function* (err) {
-        const message = FrontmatterError.isInstance(err) ? err.data.message : `Failed to parse skill ${match}`
+        const reason = FrontmatterError.isInstance(err) ? err.data.message : String(err)
+        const message = `Failed to load skill ${match}: ${reason}`
+        state.diagnostics.push({ location: match, status: "skipped", reason })
         const { Session } = yield* Effect.promise(() => import("@/session/session"))
         yield* events.publish(Session.Event.Error, { error: new NamedError.Unknown({ message }).toObject() })
         yield* Effect.logError("failed to load skill", { skill: match, error: err })
@@ -120,15 +133,34 @@ const add = Effect.fnUntraced(function* (state: State, match: string, events: Ev
 
   if (!md) return
 
-  if (!isSkillFrontmatter(md.data)) return
+  if (!isSkillFrontmatter(md.data) || !md.data.name.trim()) {
+    const reason =
+      !isRecord(md.data) || typeof md.data.name !== "string" || !md.data.name.trim()
+        ? "Missing or invalid name: expected a non-empty string"
+        : "Invalid description: expected a string"
+    state.diagnostics.push({ location: match, status: "skipped", reason })
+    yield* Effect.logWarning("failed to load skill", { skill: match, reason })
+    return
+  }
 
   if (state.skills[md.data.name]) {
+    const previous = state.diagnostics.find((item) => item.location === state.skills[md.data.name].location)
+    if (previous) {
+      previous.status = "shadowed"
+      previous.reason = `Duplicate name overridden by ${match}`
+    }
     yield* Effect.logWarning("duplicate skill name", {
       name: md.data.name,
       existing: state.skills[md.data.name].location,
       duplicate: match,
     })
   }
+
+  const reason = md.data.description?.trim()
+    ? undefined
+    : "Missing or empty description: hidden from available skills; loadable by name"
+  state.diagnostics.push({ location: match, name: md.data.name, status: reason ? "unadvertised" : "loaded", reason })
+  if (reason) yield* Effect.logWarning("skill not advertised", { skill: match, reason })
 
   state.dirs.add(path.dirname(match))
   state.skills[md.data.name] = {
@@ -164,7 +196,8 @@ const scan = Effect.fnUntraced(function* (
     }),
   )
 
-  for (const match of matches) {
+  for (const match of matches.toSorted()) {
+    if (path.relative(root, match).split(path.sep).includes(".trash")) continue
     state.matches.add(match)
     state.dirs.add(path.dirname(match))
   }
@@ -202,7 +235,10 @@ const discoverSkills = Effect.fnUntraced(function* (
     }
   }
 
-  const configDirs = yield* config.directories()
+  const configDirs = yield* ConfigPaths.directories(directory, worktree).pipe(
+    Effect.provideService(FSUtil.Service, fsys),
+    Effect.orDie,
+  )
   for (const dir of configDirs) {
     yield* scan(state, dir, OPENCODE_SKILL_PATTERN)
   }
@@ -238,7 +274,8 @@ const loadSkills = Effect.fnUntraced(function* (
   events: EventV2Bridge.Service["Service"],
 ) {
   yield* Effect.forEach(discovered.matches, (match) => add(state, match, events), {
-    concurrency: "unbounded",
+    // Later discovery scopes override earlier ones, independent of file read timing.
+    concurrency: 1,
     discard: true,
   })
 
@@ -272,7 +309,7 @@ const layer = Layer.effect(
     )
     const state = yield* InstanceState.make(
       Effect.fn("Skill.state")(function* () {
-        const s: State = { skills: {}, dirs: new Set() }
+        const s: State = { skills: {}, dirs: new Set(), diagnostics: [] }
         // Register the built-in skill BEFORE disk discovery so a user-disk
         // skill with the same name can override it.
         s.skills[CUSTOMIZE_OPENCODE_SKILL_NAME] = {
@@ -295,7 +332,19 @@ const layer = Layer.effect(
       const s = yield* InstanceState.get(state)
       const info = s.skills[name]
       if (info) return info
-      return yield* new NotFoundError({ name, available: Object.keys(s.skills).toSorted() })
+      // Skills can be created or repaired after this directory was first opened.
+      yield* InstanceState.invalidate(discovered)
+      yield* InstanceState.invalidate(state)
+      const fresh = yield* InstanceState.get(state)
+      if (fresh.skills[name]) return fresh.skills[name]
+      const issues = fresh.diagnostics.filter(
+        (item) => item.status !== "loaded" && (item.name === name || path.basename(path.dirname(item.location)) === name),
+      )
+      return yield* new NotFoundError({
+        name,
+        available: Object.keys(fresh.skills).toSorted(),
+        diagnostics: issues.length ? issues.map((item) => `${item.location}: ${item.reason}`).join("; ") : undefined,
+      })
     })
 
     const all = Effect.fn("Skill.all")(function* () {
@@ -314,12 +363,16 @@ const layer = Layer.effect(
       return list.filter((skill) => Permission.evaluate("skill", skill.name, agent.permission).action !== "deny")
     })
 
-    return Service.of({ get, require, all, dirs, available })
+    const diagnostics = Effect.fn("Skill.diagnostics")(function* () {
+      return (yield* InstanceState.get(state)).diagnostics
+    })
+
+    return Service.of({ get, require, all, dirs, available, diagnostics })
   }),
 )
 
 export function fmt(list: Info[], opts: { verbose: boolean }) {
-  const described = list.filter((skill) => skill.description !== undefined)
+  const described = list.filter((skill) => skill.description?.trim())
   if (described.length === 0) return "No skills are currently available."
   if (opts.verbose) {
     return [
