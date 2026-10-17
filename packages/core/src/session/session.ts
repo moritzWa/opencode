@@ -138,6 +138,26 @@ export const make = Effect.fn("Session.make")(function* () {
     yield* mutatePending(sessionID, inboxID, admission.steer)
     yield* execution.wake(sessionID)
   }, Effect.uninterruptible)
+  const withdrawInbox = Effect.fn("Session.withdrawInbox")(function* (
+    sessionID: SessionSchema.ID,
+    inboxID: SessionMessage.ID,
+  ) {
+    yield* get(sessionID)
+    return yield* SessionInbox.serialized(
+      sessionID,
+      Effect.gen(function* () {
+        const pending = yield* SessionInbox.find(database.db, inboxID)
+        const accepted = yield* admission.withdraw({ sessionID, id: inboxID }).pipe(
+          Effect.as(true),
+          Effect.catchTag("SessionInbox.LifecycleConflict", () => Effect.succeed(false)),
+        )
+        if (!accepted || pending) return accepted
+        yield* SessionInbox.invalidateOutput(sessionID)
+        yield* execution.interrupt(sessionID)
+        return true
+      }),
+    )
+  }, Effect.uninterruptible)
   const queueInbox = Effect.fn("Session.queueInbox")(
     (sessionID: SessionSchema.ID, inboxID: SessionMessage.ID) => mutatePending(sessionID, inboxID, admission.queue),
     Effect.uninterruptible,
@@ -362,6 +382,7 @@ export const make = Effect.fn("Session.make")(function* () {
     resume,
     interrupt,
     cancelInbox,
+    withdrawInbox,
     steerInbox,
     queueInbox,
     revert,
@@ -386,6 +407,7 @@ export const make = Effect.fn("Session.make")(function* () {
     const resume = operations.resume.bind(undefined, sessionID)
     const interrupt = operations.interrupt.bind(undefined, sessionID)
     const cancelInbox = operations.cancelInbox.bind(undefined, sessionID)
+    const withdrawInbox = operations.withdrawInbox.bind(undefined, sessionID)
     const steerInbox = operations.steerInbox.bind(undefined, sessionID)
     const queueInbox = operations.queueInbox.bind(undefined, sessionID)
     const stage = operations.revert.stage.bind(undefined, sessionID)
@@ -413,6 +435,7 @@ export const make = Effect.fn("Session.make")(function* () {
       resume,
       interrupt,
       cancelInbox,
+      withdrawInbox,
       steerInbox,
       queueInbox,
       revert,

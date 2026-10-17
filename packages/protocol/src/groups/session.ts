@@ -552,6 +552,20 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S, FormI ext
       ),
     )
     .add(
+      HttpApiEndpoint.post("session.inbox.withdraw", "/api/session/:sessionID/inbox/:id/withdraw", {
+        params: { sessionID: Session.ID, id: SessionMessage.ID },
+        success: Schema.Struct({ accepted: Schema.Boolean }),
+        error: SessionNotFoundError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "session.inbox.withdraw",
+          summary: "Withdraw unanswered input",
+          description:
+            "Withdraw a pending user input or the latest delivered user input before assistant output starts. Returns accepted only when withdrawal commits.",
+        }),
+      ),
+    )
+    .add(
       HttpApiEndpoint.patch("session.inbox.update", "/api/session/:sessionID/inbox/:inboxID", {
         params: { sessionID: Session.ID, inboxID: SessionMessage.ID },
         payload: Schema.Struct({ delivery: SessionInbox.Delivery }),

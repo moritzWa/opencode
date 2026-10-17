@@ -56,6 +56,7 @@ const layer = Layer.effect(
 
     const drain = Effect.fn("SessionRunner.drain")(function* (input: Parameters<Interface["drain"]>[0]) {
       const sessionID = input.sessionID
+      const outputRevision = SessionInbox.revision(sessionID)
       let force = input.force
       let continuing = input.continuation !== undefined
       let step = input.continuation?.step ?? 1
@@ -191,7 +192,9 @@ const layer = Layer.effect(
       while (true) {
         const next = yield* advanceToStep()
         if (next._tag !== "Ready") return next
-        continuing = yield* runStep(next.context, step)
+        continuing = yield* runStep(next.context, step).pipe(
+          Effect.provideService(SessionInbox.OutputRevision, outputRevision),
+        )
         step++
         force = false
         entering = false

@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import type { FileSystem } from "@opencode/core/filesystem"
-import { DateTime, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
+import { Cause, DateTime, Effect, Exit, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
 import path from "path"
 import { pathToFileURL } from "url"
 import { eq } from "drizzle-orm"
@@ -23,6 +23,7 @@ import { SessionMessage } from "@opencode/core/session/message"
 import { SessionProjector } from "@opencode/core/session/projector"
 import { SessionExecution } from "@opencode/core/session/execution"
 import { SessionInbox } from "@opencode/core/session/inbox"
+import { createLLMEventPublisher } from "@opencode/core/session/runner/publish-llm-event"
 import { SessionInboxTable, SessionMessageTable, SessionTable } from "@opencode/core/session/sql"
 import { SessionStore } from "@opencode/core/session/store"
 import { LocationServiceMap } from "@opencode/core/location-service-map"
@@ -1082,6 +1083,176 @@ describe("Session.prompt", () => {
 })
 
 describe("Session.inbox", () => {
+  it.effect("withdraws pending prompts without interrupting unrelated execution", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      interruptCalls.length = 0
+      for (const delivery of ["queue", "steer"] as const) {
+        const prompt = yield* session.prompt({ sessionID, text: "Withdraw me", delivery, resume: false })
+        expect(yield* session.withdrawInbox({ sessionID, inboxID: prompt.id })).toBe(true)
+        expect(yield* admitted(prompt.id)).toBeUndefined()
+        expect(yield* session.withdrawInbox({ sessionID, inboxID: prompt.id })).toBe(false)
+      }
+      expect(interruptCalls).toEqual([])
+      expect(yield* eventCount(Bus.versionedType(SessionEvent.InboxWithdrawn.type, 1))).toBe(2)
+    }),
+  )
+
+  it.effect("withdraws delivered unanswered input while preserving newer pending prompts", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const database = yield* Database.Service
+      const prompt = yield* session.prompt({ sessionID, text: "Withdraw me", resume: false })
+      yield* SessionInbox.promote(database.db, bus, sessionID, "input")
+      const queued = yield* session.prompt({ sessionID, text: "Keep me", delivery: "queue", resume: false })
+      interruptCalls.length = 0
+      expect(yield* session.withdrawInbox({ sessionID, inboxID: prompt.id })).toBe(true)
+      expect(yield* session.messages({ sessionID })).toEqual([])
+      expect(yield* session.inbox(sessionID)).toMatchObject([{ id: queued.id }])
+      expect(interruptCalls).toEqual([sessionID])
+    }),
+  )
+
+  it.effect("rejects unknown sessions and non-user inbox items", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const synthetic = yield* session.synthetic({ sessionID, text: "Keep this", resume: false })
+      expect(yield* session.withdrawInbox({ sessionID, inboxID: synthetic.id })).toBe(false)
+      expect(yield* admitted(synthetic.id)).toBeDefined()
+      expect(
+        yield* session
+          .withdrawInbox({ sessionID: Session.ID.make("ses_missing"), inboxID: synthetic.id })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "Session.NotFoundError" })
+    }),
+  )
+
+  it.effect("rejects an older delivered prompt without removing the newer one", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const database = yield* Database.Service
+      const first = yield* session.prompt({ sessionID, text: "First", resume: false })
+      const second = yield* session.prompt({ sessionID, text: "Second", resume: false })
+      yield* SessionInbox.promote(database.db, bus, sessionID, "input")
+      expect(yield* session.withdrawInbox({ sessionID, inboxID: first.id })).toBe(false)
+      expect((yield* session.messages({ sessionID, order: "asc" })).map((message) => message.id)).toEqual([
+        first.id,
+        second.id,
+      ])
+    }),
+  )
+
+  for (const output of ["text-delta", "tool-input-start"] as const) {
+    it.effect(`atomically rejects withdrawal after ${output}`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* Session.Service
+        const bus = yield* Bus.Service
+        const database = yield* Database.Service
+        const prompt = yield* session.prompt({ sessionID, text: "Already answered", resume: false })
+        yield* SessionInbox.promote(database.db, bus, sessionID, "input")
+        const publisher = createLLMEventPublisher(bus, {
+          sessionID,
+          assistantMessageID: SessionMessage.ID.create(),
+          agent: Agent.ID.make("build"),
+          model: { id: Model.ID.make("model"), providerID: Provider.ID.make("provider") },
+          providerMetadataKey: "provider",
+          started: 0,
+        })
+        if (output === "text-delta") yield* publisher.publish({ type: "text-start", id: "output" })
+        yield* publisher.publish(
+          output === "tool-input-start"
+            ? { type: output, id: "output", name: "shell" }
+            : { type: output, id: "output", text: "Visible output" },
+        )
+        interruptCalls.length = 0
+        expect(yield* session.withdrawInbox({ sessionID, inboxID: prompt.id })).toBe(false)
+        if (output === "text-delta") {
+          yield* publisher.publish({ type: "text-end", id: "output" })
+          expect(yield* session.withdrawInbox({ sessionID, inboxID: prompt.id })).toBe(false)
+        }
+        expect(interruptCalls).toEqual([])
+        expect(yield* eventCount(Bus.versionedType(SessionEvent.InboxWithdrawn.type, 1))).toBe(0)
+        expect((yield* session.messages({ sessionID })).length).toBe(2)
+      }),
+    )
+  }
+
+  it.effect("fences prepared output and removes an empty assistant shell on withdrawal", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const database = yield* Database.Service
+      const prompt = yield* session.prompt({ sessionID, text: "No answer yet", resume: false })
+      yield* SessionInbox.promote(database.db, bus, sessionID, "input")
+      const expected = SessionInbox.revision(sessionID)
+      const publisher = createLLMEventPublisher(bus, {
+        sessionID,
+        assistantMessageID: SessionMessage.ID.create(),
+        agent: Agent.ID.make("build"),
+        model: { id: Model.ID.make("model"), providerID: Provider.ID.make("provider") },
+        providerMetadataKey: "provider",
+        started: 0,
+      })
+      yield* publisher.startAssistant()
+      yield* publisher.publish({ type: "reasoning-start", id: "thinking" })
+      yield* publisher.publish({ type: "reasoning-delta", id: "thinking", text: "Still thinking" })
+      yield* publisher.publish({ type: "reasoning-end", id: "thinking" })
+      yield* publisher.publish({ type: "text-start", id: "empty" })
+      expect(yield* session.withdrawInbox({ sessionID, inboxID: prompt.id })).toBe(true)
+      const late = yield* publisher
+        .publish({ type: "text-start", id: "late" })
+        .pipe(Effect.provideService(SessionInbox.OutputRevision, expected), Effect.exit)
+      expect(Exit.isFailure(late) && Cause.hasInterruptsOnly(late.cause)).toBe(true)
+      expect(yield* session.messages({ sessionID })).toEqual([])
+      const fresh = yield* SessionInbox.guardOutput(sessionID, Effect.succeed("fresh")).pipe(
+        Effect.provideService(SessionInbox.OutputRevision, SessionInbox.revision(sessionID)),
+      )
+      expect(fresh).toBe("fresh")
+    }),
+  )
+
+  it.effect("serializes withdrawal against promotion and concurrent withdrawal retries", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const database = yield* Database.Service
+      const prompt = yield* session.prompt({ sessionID, text: "Racing promotion", resume: false })
+      const results = yield* Effect.all(
+        [
+          SessionInbox.promote(database.db, bus, sessionID, "input"),
+          session.withdrawInbox({ sessionID, inboxID: prompt.id }),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(results[1]).toBe(true)
+      expect(yield* session.inbox(sessionID)).toEqual([])
+      expect(yield* session.messages({ sessionID })).toEqual([])
+
+      const next = yield* session.prompt({ sessionID, text: "Only one wins", resume: false })
+      yield* SessionInbox.promote(database.db, bus, sessionID, "input")
+      interruptCalls.length = 0
+      const accepted = yield* Effect.all(
+        [
+          session.withdrawInbox({ sessionID, inboxID: next.id }),
+          session.withdrawInbox({ sessionID, inboxID: next.id }),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(accepted.filter(Boolean)).toHaveLength(1)
+      expect(interruptCalls).toEqual([sessionID])
+      expect(yield* session.messages({ sessionID })).toEqual([])
+    }),
+  )
+
   it.effect("fails for an unknown session", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service

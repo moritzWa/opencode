@@ -4123,6 +4123,51 @@ describe("SessionRunnerLLM", () => {
     expect(userTexts(s.requests[2])).toEqual(["Start working", "Wait until continuation ends"])
   })
 
+  scenario("withdraws delivered unanswered input and interrupts the active provider request", function* (s) {
+    const prompt = yield* s.admit("Withdraw this request")
+    yield* s.llm.push(TestLLM.text("Must not appear", "withdrawn"), TestLLM.text("Fresh response", "fresh"))
+    const gate = yield* s.llm.gate
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* gate.started
+    const queued = yield* s.session.prompt({ sessionID, text: "Kept request", delivery: "queue", resume: false })
+
+    expect(yield* s.session.withdrawInbox({ sessionID, inboxID: prompt.id })).toBe(true)
+    const stopped = yield* Fiber.await(run)
+    expect(Exit.isFailure(stopped) && Cause.hasInterruptsOnly(stopped.cause)).toBe(true)
+    yield* gate.release
+    expect(yield* s.messages).toEqual([])
+    expect(yield* s.inbox).toMatchObject([{ id: queued.id }])
+
+    yield* s.resume
+    expect(s.requests.map(userTexts)).toEqual([["Withdraw this request"], ["Kept request"]])
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Kept request"),
+      Expected.assistant({}, [Expected.text("Fresh response")]),
+    ])
+  })
+
+  scenario("rejects withdrawal without interrupting a provider that already emitted output", function* (s) {
+    const prompt = yield* s.admit("Keep this answer")
+    const output = yield* Deferred.make<void>()
+    yield* s.llm.push(
+      Stream.concat(
+        Stream.fromIterable([LLMEvent.textStart({ id: "text" }), LLMEvent.textDelta({ id: "text", text: "Started" })]),
+        Stream.fromEffect(Deferred.succeed(output, undefined)).pipe(Stream.flatMap(() => Stream.never)),
+      ),
+    )
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Deferred.await(output)
+    expect(yield* s.session.withdrawInbox({ sessionID, inboxID: prompt.id })).toBe(false)
+    const execution = yield* SessionExecution.Service
+    expect(yield* execution.isActive(sessionID)).toBe(true)
+    expect(yield* execution.interrupt(sessionID)).toBe(true)
+    yield* Fiber.await(run)
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Keep this answer"),
+      Expected.assistant({}, [Expected.text("Started")]),
+    ])
+  })
+
   scenario("keeps queued input parked when a steer is cancelled during preparation", function* (s) {
     const runner = yield* SessionRunner.Service
     yield* s.admit("A")

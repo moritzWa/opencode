@@ -1,6 +1,6 @@
 export * as SessionInbox from "./inbox.js"
 
-import { and, asc, eq, or } from "drizzle-orm"
+import { and, asc, eq, gt, or } from "drizzle-orm"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import {
@@ -61,6 +61,41 @@ type PendingRef = { readonly id: SessionMessage.ID; readonly sessionID: SessionS
 
 export const serialized = <A, E, R>(sessionID: SessionSchema.ID, effect: Effect.Effect<A, E, R>) =>
   inboxLocks.withLock(sessionID)(effect)
+
+const revisions = new Map<SessionSchema.ID, number>()
+const textOutputs = new Map<SessionSchema.ID, SessionMessage.ID>()
+export const revision = (sessionID: SessionSchema.ID) => revisions.get(sessionID) ?? 0
+/** Text deltas are ephemeral until text-end; fence withdrawal during that live gap. */
+export const markTextOutput = (sessionID: SessionSchema.ID, messageID: SessionMessage.ID) =>
+  Effect.sync(() => textOutputs.set(sessionID, messageID))
+export const clearTextOutput = (sessionID: SessionSchema.ID, messageID: SessionMessage.ID) =>
+  Effect.sync(() => {
+    if (textOutputs.get(sessionID) === messageID) textOutputs.delete(sessionID)
+  })
+export const OutputRevision = Context.Reference<number | undefined>("@opencode/SessionInbox/OutputRevision", {
+  defaultValue: () => undefined,
+})
+const OutputLock = Context.Reference<SessionSchema.ID | undefined>("@opencode/SessionInbox/OutputLock", {
+  defaultValue: () => undefined,
+})
+
+/** A prepared response must not recreate an assistant after its prompt was withdrawn. */
+export const guardOutput = <A, E, R>(sessionID: SessionSchema.ID, effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const guarded = Effect.gen(function* () {
+      const expected = yield* OutputRevision
+      if (expected !== undefined && expected !== revision(sessionID)) return yield* Effect.interrupt
+      return yield* effect
+    })
+    if ((yield* OutputLock) === sessionID) return yield* guarded
+    return yield* serialized(sessionID, guarded.pipe(Effect.provideService(OutputLock, sessionID)))
+  })
+
+export const invalidateOutput = (sessionID: SessionSchema.ID) =>
+  Effect.sync(() => {
+    revisions.set(sessionID, revision(sessionID) + 1)
+    textOutputs.delete(sessionID)
+  })
 
 export class LifecycleConflict extends Schema.TaggedError<LifecycleConflict>()("SessionInbox.LifecycleConflict", {
   id: SessionMessage.ID,
@@ -237,6 +272,13 @@ export const make = Effect.fn("SessionInbox.make")(function* () {
     ),
   )
 
+  const withdraw = Effect.fn("SessionInbox.withdraw")((input: PendingRef) =>
+    bus.publish(SessionEvent.InboxWithdrawn, { sessionID: input.sessionID, inboxID: input.id }).pipe(
+      Effect.asVoid,
+      Effect.catchDefect((defect) => (defect instanceof LifecycleConflict ? Effect.fail(defect) : Effect.die(defect))),
+    ),
+  )
+
   const steer = Effect.fn("SessionInbox.steer")((input: PendingRef) =>
     publishMutation(
       input,
@@ -265,6 +307,7 @@ export const make = Effect.fn("SessionInbox.make")(function* () {
     admit,
     admitCompaction,
     cancel,
+    withdraw,
     steer,
     queue,
   }
@@ -352,6 +395,59 @@ export const projectCancelled = Effect.fn("SessionInbox.projectCancelled")(funct
     .get()
     .pipe(Effect.orDie)
   if (!deleted) return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+})
+
+/** Validation and removal share the publication transaction with competing output events. */
+export const projectWithdrawn = Effect.fn("SessionInbox.projectWithdrawn")(function* (
+  db: DatabaseService,
+  input: PendingRef,
+) {
+  const pending = yield* find(db, input.id)
+  if (pending) {
+    if (pending.sessionID !== input.sessionID || pending.type !== "user")
+      return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+    return yield* projectCancelled(db, input)
+  }
+  const prompt = yield* db
+    .select()
+    .from(SessionMessageTable)
+    .where(and(eq(SessionMessageTable.id, input.id), eq(SessionMessageTable.session_id, input.sessionID)))
+    .get()
+    .pipe(Effect.orDie)
+  if (!prompt || prompt.type !== "user") return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+  const later = yield* db
+    .select()
+    .from(SessionMessageTable)
+    .where(and(eq(SessionMessageTable.session_id, input.sessionID), gt(SessionMessageTable.seq, prompt.seq)))
+    .all()
+    .pipe(Effect.orDie)
+  // Only the latest delivered prompt is withdrawable. Reasoning and empty text
+  // blocks do not count as visible output; any tool entry does.
+  if (
+    later.some((row) => {
+      if (row.type === "user" || row.type === "synthetic") return true
+      const message = decodeMessage({ ...row.data, id: row.id, type: row.type })
+      return (
+        message.type === "assistant" &&
+        (textOutputs.get(input.sessionID) === message.id ||
+          message.content.some((part) => part.type === "tool" || (part.type === "text" && part.text.length > 0)))
+      )
+    })
+  )
+    return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+  yield* db
+    .delete(SessionMessageTable)
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, input.sessionID),
+        or(
+          eq(SessionMessageTable.id, input.id),
+          and(gt(SessionMessageTable.seq, prompt.seq), eq(SessionMessageTable.type, "assistant")),
+        ),
+      ),
+    )
+    .run()
+    .pipe(Effect.orDie)
 })
 
 const projectDelivery = Effect.fn("SessionInbox.projectDelivery")(function* (

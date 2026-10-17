@@ -431,7 +431,7 @@ export function createData(config: CreateDataInput) {
   }
 
   // Remove an inbox item from pending, input, and the visible transcript.
-  // Used by the inbox.cancelled handler and by optimistic rollback.
+  // Used by inbox cancellation/withdrawal and by optimistic rollback.
   function retractLocal(sessionID: string, inboxID: string) {
     batch(() => {
       removePending(sessionID, inboxID)
@@ -808,6 +808,22 @@ export function createData(config: CreateDataInput) {
       case "session.inbox.delivery.changed":
         updatePending(event.data.sessionID, event.data.inboxID, event.data.delivery)
         return
+      case "session.inbox.withdrawn": {
+        if (!result.session.input.has(event.data.sessionID, event.data.inboxID)) {
+          message.update(event.data.sessionID, (draft, index) => {
+            const position = index.get(event.data.inboxID)
+            if (position === undefined) return
+            // Acceptance guarantees later assistants have no visible text or tools.
+            const retained = draft.filter((item, at) => at <= position || item.type !== "assistant")
+            draft.splice(0, draft.length, ...retained)
+            index.clear()
+            message.reindex(draft, index, 0)
+          })
+        }
+        retractLocal(event.data.sessionID, event.data.inboxID)
+        compacting.get(event.data.sessionID)?.observed.add(event.data.inboxID)
+        return
+      }
       case "session.inbox.cancelled": {
         retractLocal(event.data.sessionID, event.data.inboxID)
         compacting.get(event.data.sessionID)?.observed.add(event.data.inboxID)

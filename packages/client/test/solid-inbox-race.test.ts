@@ -47,7 +47,7 @@ const enqueued: OpenCodeEvent = {
   },
 }
 
-test.each(["delivered", "cancelled"] as const)(
+test.each(["delivered", "cancelled", "withdrawn"] as const)(
   "a delayed inbox snapshot cannot resurrect a %s prompt",
   async (action) => {
     const response = Promise.withResolvers<Response>()
@@ -67,7 +67,7 @@ test.each(["delivered", "cancelled"] as const)(
       await reading
       expect(setup.data.session.input.has(item.sessionID, item.id)).toBe(false)
       const message = setup.data.session.message.get(item.sessionID, item.id)
-      if (action === "cancelled") expect(message).toBeUndefined()
+      if (action !== "delivered") expect(message).toBeUndefined()
       else expect(message?.time.created).toBe(2)
     } finally {
       response.resolve(Response.json({ data: [] }))
@@ -100,6 +100,61 @@ test.each(["enqueue", "delivery"] as const)("inbox hydration retains a concurren
     setup.dispose()
   }
 })
+
+test.each(["pending", "delivered"] as const)(
+  "withdrawal retracts a %s prompt without leaving orphaned assistants",
+  async (state) => {
+    const setup = fixture(async () =>
+      Response.json({
+        data: [
+          { id: "msg_previous", type: "user", text: "Previous", time: { created: 0 } },
+          { id: item.id, type: "user", ...item.payload, time: item.time },
+          {
+            id: "msg_empty",
+            type: "assistant",
+            agent: "build",
+            model: { providerID: "provider", id: "model" },
+            content: [],
+            time: { created: 2 },
+          },
+          {
+            id: "msg_reasoning",
+            type: "assistant",
+            agent: "build",
+            model: { providerID: "provider", id: "model" },
+            content: [{ type: "reasoning", text: "Thinking" }],
+            time: { created: 3 },
+          },
+          {
+            id: "msg_empty_text",
+            type: "assistant",
+            agent: "build",
+            model: { providerID: "provider", id: "model" },
+            content: [{ type: "text", text: "" }],
+            time: { created: 4 },
+          },
+        ].toReversed(),
+        cursor: {},
+      }),
+    )
+    try {
+      await setup.data.session.message.sync(item.sessionID)
+      if (state === "pending") setup.emit(enqueued)
+      setup.emit({
+        id: "evt_withdrawn",
+        type: "session.inbox.withdrawn",
+        created: 5,
+        durable: { aggregateID: item.sessionID, seq: 5, version: 1 },
+        data: { sessionID: item.sessionID, inboxID: item.id },
+      })
+      expect(setup.data.session.message.list(item.sessionID).map((message) => message.id)).toEqual(
+        state === "pending" ? ["msg_previous", "msg_empty", "msg_reasoning", "msg_empty_text"] : ["msg_previous"],
+      )
+    } finally {
+      setup.dispose()
+    }
+  },
+)
 
 test("hydration preserves submission order across optimistic admissions", async () => {
   const response = Promise.withResolvers<Response>()

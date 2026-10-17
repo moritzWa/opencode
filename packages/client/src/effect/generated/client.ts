@@ -75,6 +75,8 @@ import type {
   SessionInboxListOutput,
   SessionInboxCancelInput,
   SessionInboxCancelOutput,
+  SessionInboxWithdrawInput,
+  SessionInboxWithdrawOutput,
   SessionInboxUpdateInput,
   SessionInboxUpdateOutput,
   SessionInstructionsEntryListInput,
@@ -166,6 +168,10 @@ import type {
   CredentialActivateOutput,
   CredentialRemoveInput,
   CredentialRemoveOutput,
+  TuiSelectSessionInput,
+  TuiSelectSessionOutput,
+  TuiExecuteCommandInput,
+  TuiExecuteCommandOutput,
   ProjectListInput,
   ProjectListOutput,
   ProjectUpdateInput,
@@ -641,6 +647,13 @@ const EndpointSessionInboxCancel = (raw: RawClient["server.session"]) => (input:
     ),
   )
 
+const EndpointSessionInboxWithdraw = (raw: RawClient["server.session"]) => (input: SessionInboxWithdrawInput) =>
+  preserveEffect<SessionInboxWithdrawOutput>()(
+    raw["session.inbox.withdraw"]({ params: { sessionID: input["sessionID"], id: input["id"] } }).pipe(
+      Effect.mapError(mapClientError),
+    ),
+  )
+
 const EndpointSessionInboxUpdate = (raw: RawClient["server.session"]) => (input: SessionInboxUpdateInput) =>
   preserveEffect<SessionInboxUpdateOutput>()(
     raw["session.inbox.update"]({
@@ -805,6 +818,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
   inbox: {
     list: EndpointSessionInboxList(raw),
     cancel: EndpointSessionInboxCancel(raw),
+    withdraw: EndpointSessionInboxWithdraw(raw),
     update: EndpointSessionInboxUpdate(raw),
   },
   instructions: {
@@ -1115,6 +1129,25 @@ const adaptGroupCredential = (raw: RawClient["server.credential"]) => ({
   update: EndpointCredentialUpdate(raw),
   activate: EndpointCredentialActivate(raw),
   remove: EndpointCredentialRemove(raw),
+})
+
+const EndpointTuiSelectSession = (raw: RawClient["server.tui"]) => (input: TuiSelectSessionInput) =>
+  preserveEffect<TuiSelectSessionOutput>()(
+    raw["tui.selectSession"]({
+      payload: { sessionID: input["sessionID"], client: input["client"], targetDirectory: input["targetDirectory"] },
+    }).pipe(Effect.mapError(mapClientError)),
+  )
+
+const EndpointTuiExecuteCommand = (raw: RawClient["server.tui"]) => (input: TuiExecuteCommandInput) =>
+  preserveEffect<TuiExecuteCommandOutput>()(
+    raw["tui.executeCommand"]({ payload: { command: input["command"], client: input["client"] } }).pipe(
+      Effect.mapError(mapClientError),
+    ),
+  )
+
+const adaptGroupTui = (raw: RawClient["server.tui"]) => ({
+  selectSession: EndpointTuiSelectSession(raw),
+  executeCommand: EndpointTuiExecuteCommand(raw),
 })
 
 const EndpointProjectList = (raw: RawClient["server.project"]) => (input?: ProjectListInput) =>
@@ -1635,6 +1668,7 @@ const adaptClient = (raw: RawClient) => ({
   integration: adaptGroupIntegration(raw["server.integration"]),
   mcp: adaptGroupMcp(raw["server.mcp"]),
   credential: adaptGroupCredential(raw["server.credential"]),
+  tui: adaptGroupTui(raw["server.tui"]),
   project: adaptGroupProject(raw["server.project"]),
   form: adaptGroupForm(raw["server.form"]),
   permission: adaptGroupPermission(raw["server.permission"]),

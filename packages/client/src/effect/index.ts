@@ -21,6 +21,7 @@ export type {
   WebSearchApi,
   SessionApi,
   SkillApi,
+  TuiApi,
 } from "./api.js"
 export { Agent } from "@opencode/schema/agent"
 export { Command } from "@opencode/schema/command"

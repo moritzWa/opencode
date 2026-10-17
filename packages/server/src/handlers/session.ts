@@ -526,6 +526,16 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.inbox.withdraw",
+        Effect.fn(function* (ctx) {
+          return {
+            accepted: yield* session
+              .withdrawInbox({ sessionID: ctx.params.sessionID, inboxID: ctx.params.id })
+              .pipe(Effect.catchTag("Session.NotFoundError", missingSession)),
+          }
+        }),
+      )
+      .handle(
         "session.inbox.update",
         Effect.fn(function* (ctx) {
           return yield* pendingMutation(

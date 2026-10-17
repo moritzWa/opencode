@@ -5,7 +5,13 @@ export type ServerInfo = {
   pid: number
   urls: Array<string>
   paths: { tmp: string }
-  capabilities?: { persistentPty?: boolean | undefined } | undefined
+  capabilities?:
+    | {
+        persistentPty?: boolean | undefined
+        tuiSessionSelect?: boolean | undefined
+        tuiExecuteCommand?: boolean | undefined
+      }
+    | undefined
 }
 
 export type PairingCode = { code: string; expires_in: number }
@@ -1074,6 +1080,16 @@ export type SessionInboxCancelled = {
   data: { sessionID: SessionID; inboxID: SessionMessageID }
 }
 
+export type SessionInboxWithdrawn = {
+  id: EventID
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.inbox.withdrawn"
+  durable: { aggregateID: string; seq: EventSeq; version: 1 }
+  location?: LocationRef
+  data: { sessionID: SessionID; inboxID: SessionMessageID }
+}
+
 export type SessionInboxDeliveryChanged = {
   id: EventID
   created: number
@@ -1773,6 +1789,7 @@ export type TuiCommandExecute = {
   type: "tui.command.execute"
   location?: LocationRef
   data: {
+    client?: string
     command:
       | "session.list"
       | "session.new"
@@ -1814,7 +1831,7 @@ export type TuiSessionSelect = {
   metadata?: { [x: string]: any }
   type: "tui.session.select"
   location?: LocationRef
-  data: { sessionID: SessionID }
+  data: { sessionID: SessionID; client?: string; targetDirectory?: string }
 }
 
 export type InstallationUpdated = {
@@ -2520,6 +2537,7 @@ export type SessionEventDurable =
   | SessionInboxDelivered
   | SessionInboxEnqueued
   | SessionInboxCancelled
+  | SessionInboxWithdrawn
   | SessionInboxDeliveryChanged
   | SessionExecutionStarted
   | SessionExecutionSucceeded
@@ -2584,6 +2602,7 @@ export type V2Event =
   | SessionInboxDelivered
   | SessionInboxEnqueued
   | SessionInboxCancelled
+  | SessionInboxWithdrawn
   | SessionInboxDeliveryChanged
   | SessionExecutionStarted
   | SessionExecutionSucceeded
@@ -4736,6 +4755,13 @@ export type SessionInboxCancelInput = {
 
 export type SessionInboxCancelOutput = void
 
+export type SessionInboxWithdrawInput = {
+  readonly sessionID: { readonly sessionID: string; readonly id: string }["sessionID"]
+  readonly id: { readonly sessionID: string; readonly id: string }["id"]
+}
+
+export type SessionInboxWithdrawOutput = { accepted: boolean }
+
 export type SessionInboxUpdateInput = {
   readonly sessionID: { readonly sessionID: string; readonly inboxID: string }["sessionID"]
   readonly inboxID: { readonly sessionID: string; readonly inboxID: string }["inboxID"]
@@ -6196,6 +6222,73 @@ export type CredentialActivateOutput = void
 export type CredentialRemoveInput = { readonly credentialID: { readonly credentialID: string }["credentialID"] }
 
 export type CredentialRemoveOutput = void
+
+export type TuiSelectSessionInput = {
+  readonly sessionID: {
+    readonly sessionID: string
+    readonly client?: string
+    readonly targetDirectory?: string
+  }["sessionID"]
+  readonly client?: {
+    readonly sessionID: string
+    readonly client?: string
+    readonly targetDirectory?: string
+  }["client"]
+  readonly targetDirectory?: {
+    readonly sessionID: string
+    readonly client?: string
+    readonly targetDirectory?: string
+  }["targetDirectory"]
+}
+
+export type TuiSelectSessionOutput = boolean
+
+export type TuiExecuteCommandInput = {
+  readonly command: {
+    readonly command:
+      | "session.list"
+      | "session.new"
+      | "session.interrupt"
+      | "session.background"
+      | "session.compact"
+      | "session.page.up"
+      | "session.page.down"
+      | "session.line.up"
+      | "session.line.down"
+      | "session.half.page.up"
+      | "session.half.page.down"
+      | "session.first"
+      | "session.last"
+      | "prompt.clear"
+      | "prompt.submit"
+      | "agent.cycle"
+      | (string & {})
+    readonly client: string
+  }["command"]
+  readonly client: {
+    readonly command:
+      | "session.list"
+      | "session.new"
+      | "session.interrupt"
+      | "session.background"
+      | "session.compact"
+      | "session.page.up"
+      | "session.page.down"
+      | "session.line.up"
+      | "session.line.down"
+      | "session.half.page.up"
+      | "session.half.page.down"
+      | "session.first"
+      | "session.last"
+      | "prompt.clear"
+      | "prompt.submit"
+      | "agent.cycle"
+      | (string & {})
+    readonly client: string
+  }["client"]
+}
+
+export type TuiExecuteCommandOutput = boolean
 
 export type ProjectListInput = { readonly archived?: { readonly archived?: boolean | undefined }["archived"] }
 

@@ -670,6 +670,9 @@ const layer = Layer.effectDiscard(
         sessionID: event.data.sessionID,
       }),
     )
+    yield* bus.project(SessionEvent.InboxWithdrawn, (event) =>
+      SessionInbox.projectWithdrawn(db, { id: event.data.inboxID, sessionID: event.data.sessionID }),
+    )
     yield* bus.project(SessionEvent.InboxDeliveryChanged, (event) =>
       SessionInbox.projectDeliveryChanged(db, {
         id: event.data.inboxID,

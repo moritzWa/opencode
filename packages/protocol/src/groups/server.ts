@@ -14,6 +14,8 @@ export const ServerInfo = Schema.Struct({
   capabilities: Schema.optional(
     Schema.Struct({
       persistentPty: Schema.optional(Schema.Boolean),
+      tuiSessionSelect: Schema.optional(Schema.Boolean),
+      tuiExecuteCommand: Schema.optional(Schema.Boolean),
     }),
   ),
 }).annotate({ identifier: "ServerInfo" })

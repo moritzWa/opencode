@@ -166,6 +166,7 @@ export interface Interface {
    */
   readonly inbox: (sessionID: SessionSchema.ID) => Effect.Effect<SessionInbox.Info[], NotFoundError>
   readonly cancelInbox: (input: InboxItemRef) => Effect.Effect<void, NotFoundError | InboxConflictError>
+  readonly withdrawInbox: (input: InboxItemRef) => Effect.Effect<boolean, NotFoundError>
   readonly steerInbox: (input: InboxItemRef) => Effect.Effect<void, NotFoundError | InboxConflictError>
   readonly queueInbox: (input: InboxItemRef) => Effect.Effect<void, NotFoundError | InboxConflictError>
   /**
@@ -432,6 +433,7 @@ const layer = Layer.effect(
       }),
       inbox: (sessionID) => sessions.forSession(sessionID).inbox(),
       cancelInbox: (input) => sessions.forSession(input.sessionID).cancelInbox(input.inboxID),
+      withdrawInbox: (input) => sessions.forSession(input.sessionID).withdrawInbox(input.inboxID),
       steerInbox: (input) => sessions.forSession(input.sessionID).steerInbox(input.inboxID),
       queueInbox: (input) => sessions.forSession(input.sessionID).queueInbox(input.inboxID),
       log: (input) =>

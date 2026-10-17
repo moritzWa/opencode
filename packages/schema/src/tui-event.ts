@@ -13,6 +13,7 @@ export const PromptAppend = Event.ephemeral({ type: "tui.prompt.append", schema:
 export const CommandExecute = Event.ephemeral({
   type: "tui.command.execute",
   schema: {
+    client: optional(Schema.String.annotate({ description: "Only the TUI with this client id executes the command." })),
     command: Schema.Union([
       Schema.Literals([
         "session.list",
@@ -53,6 +54,16 @@ export const SessionSelect = Event.ephemeral({
   type: "tui.session.select",
   schema: {
     sessionID: SessionID.annotate({ description: "Session ID to navigate to" }),
+    client: optional(
+      Schema.String.annotate({
+        description: "Only the TUI with this client id navigates. Omit to navigate every attached TUI.",
+      }),
+    ),
+    targetDirectory: optional(
+      Schema.String.annotate({
+        description: "Directory to move the TUI to before showing the session. Omit to keep its current directory.",
+      }),
+    ),
   },
 })
 

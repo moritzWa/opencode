@@ -117,6 +117,7 @@ describe("public event manifest", () => {
         "session.inbox.delivered.1",
         "session.inbox.enqueued.1",
         "session.inbox.cancelled.1",
+        "session.inbox.withdrawn.1",
         "session.inbox.delivery.changed.1",
         "session.execution.started.1",
         "session.execution.succeeded.1",
@@ -173,6 +174,12 @@ describe("public event manifest", () => {
   test("uses the current Session skill event as durable version 1", () => {
     expect(EventManifest.Durable.get("session.skill.activated.1")).toBe(SessionEvent.Skill.Activated)
     expect(EventManifest.Latest.get("session.skill.activated")).toBe(SessionEvent.Skill.Activated)
+  })
+
+  test("exposes the canonical durable withdrawal event to current clients", () => {
+    expect(EventManifest.Server.get("session.inbox.withdrawn")).toBe(SessionEvent.InboxWithdrawn)
+    expect(EventManifest.Durable.get("session.inbox.withdrawn.1")).toBe(SessionEvent.InboxWithdrawn)
+    expect(SessionEvent.InboxWithdrawn.durable).toEqual({ version: 1, aggregate: "sessionID" })
   })
 
   test("keeps simplified session fragment and tool payloads on durable version 1", () => {

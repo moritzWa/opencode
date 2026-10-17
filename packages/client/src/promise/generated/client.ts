@@ -69,6 +69,8 @@ import type {
   SessionInboxListOutput,
   SessionInboxCancelInput,
   SessionInboxCancelOutput,
+  SessionInboxWithdrawInput,
+  SessionInboxWithdrawOutput,
   SessionInboxUpdateInput,
   SessionInboxUpdateOutput,
   SessionInstructionsEntryListInput,
@@ -160,6 +162,10 @@ import type {
   CredentialActivateOutput,
   CredentialRemoveInput,
   CredentialRemoveOutput,
+  TuiSelectSessionInput,
+  TuiSelectSessionOutput,
+  TuiExecuteCommandInput,
+  TuiExecuteCommandOutput,
   ProjectListInput,
   ProjectListOutput,
   ProjectUpdateInput,
@@ -903,6 +909,17 @@ export function make(options: ClientOptions) {
             },
             requestOptions,
           ),
+        withdraw: (input: SessionInboxWithdrawInput, requestOptions?: RequestOptions) =>
+          request<SessionInboxWithdrawOutput>(
+            {
+              method: "POST",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/inbox/${encodeURIComponent(input.id)}/withdraw`,
+              successStatus: 200,
+              declaredStatuses: [400, 401, 404],
+              empty: false,
+            },
+            requestOptions,
+          ),
         update: (input: SessionInboxUpdateInput, requestOptions?: RequestOptions) =>
           request<SessionInboxUpdateOutput>(
             {
@@ -1485,6 +1502,32 @@ export function make(options: ClientOptions) {
             successStatus: 204,
             declaredStatuses: [400, 401],
             empty: true,
+          },
+          requestOptions,
+        ),
+    },
+    tui: {
+      selectSession: (input: TuiSelectSessionInput, requestOptions?: RequestOptions) =>
+        request<TuiSelectSessionOutput>(
+          {
+            method: "POST",
+            path: `/api/tui/select-session`,
+            body: { sessionID: input["sessionID"], client: input["client"], targetDirectory: input["targetDirectory"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401, 404],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      executeCommand: (input: TuiExecuteCommandInput, requestOptions?: RequestOptions) =>
+        request<TuiExecuteCommandOutput>(
+          {
+            method: "POST",
+            path: `/api/tui/execute-command`,
+            body: { command: input["command"], client: input["client"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
           },
           requestOptions,
         ),

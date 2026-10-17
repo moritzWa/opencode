@@ -7,6 +7,7 @@ import { Effect, Fiber, Iterable } from "effect"
 import { isReadonlyArrayNonEmpty } from "effect/Array"
 import { Bus } from "../../bus.js"
 import { SessionEvent } from "../event.js"
+import { SessionInbox } from "../inbox.js"
 import { SessionMessage } from "../message.js"
 import { SessionSchema } from "../schema.js"
 import { SessionError } from "@opencode/schema/session-error"
@@ -126,22 +127,25 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
   let stepFailure: SessionError.Error | undefined
   let stepSettlement: StepRecord["finish"]
 
-  const startAssistant = Effect.fnUntraced(function* () {
-    if (stepStarted) return assistantMessageID
-    const snapshot = input.pendingSnapshot ? yield* input.pendingSnapshot : undefined
-    // Check again after the await, so the check and the mark below never straddle a yield.
-    if (stepStarted) return assistantMessageID
-    stepStarted = true
-    yield* bus.publish(SessionEvent.Step.Started, {
-      sessionID: input.sessionID,
-      agent: input.agent,
-      model: input.model,
-      assistantMessageID,
-      snapshot,
-      started: input.started,
-    })
-    return assistantMessageID
-  })
+  const startAssistant = Effect.fnUntraced(
+    function* () {
+      if (stepStarted) return assistantMessageID
+      const snapshot = input.pendingSnapshot ? yield* input.pendingSnapshot : undefined
+      // Check again after the await, so the check and the mark below never straddle a yield.
+      if (stepStarted) return assistantMessageID
+      stepStarted = true
+      yield* bus.publish(SessionEvent.Step.Started, {
+        sessionID: input.sessionID,
+        agent: input.agent,
+        model: input.model,
+        assistantMessageID,
+        snapshot,
+        started: input.started,
+      })
+      return assistantMessageID
+    },
+    (effect) => SessionInbox.guardOutput(input.sessionID, effect),
+  )
   const currentAssistantMessageID = () =>
     stepStarted ? Effect.succeed(assistantMessageID) : Effect.die(new Error("Tool event before assistant step start"))
   const streamed = Effect.fnUntraced(function* () {
@@ -247,6 +251,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
           text: value,
           state,
         })
+        if (value.length > 0) yield* SessionInbox.clearTextOutput(input.sessionID, assistantMessageID)
       }),
     (_textID, value, ordinal) =>
       Effect.gen(function* () {
@@ -456,6 +461,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
         })
         return
       case "text-delta":
+        if (event.text.length > 0) yield* SessionInbox.markTextOutput(input.sessionID, assistantMessageID)
         yield* text.append(event.id, event.text, providerState(event.providerMetadata))
         return
       case "text-end":
@@ -599,7 +605,8 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     }
   }, Effect.uninterruptible)
 
-  const publishTraced = Effect.fn("SessionRunner.publishLLMEvent")(publish)
+  const publishGuarded = (event: LLMEvent) => SessionInbox.guardOutput(input.sessionID, publish(event))
+  const publishTraced = Effect.fn("SessionRunner.publishLLMEvent")(publishGuarded)
 
   const progress = Effect.fnUntraced(function* (id: string, update: Tool.Metadata) {
     const tool = tools.get(id)
@@ -636,7 +643,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
   return {
     publish: (event: LLMEvent) => {
       if (event.type === "text-delta" || event.type === "reasoning-delta" || event.type === "tool-input-delta")
-        return publish(event)
+        return publishGuarded(event)
       return publishTraced(event)
     },
     progress,

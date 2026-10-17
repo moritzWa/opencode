@@ -47,7 +47,13 @@ export type ServerInfoOutput = {
   readonly pid: number
   readonly urls: ReadonlyArray<string>
   readonly paths: { readonly tmp: string }
-  readonly capabilities?: { readonly persistentPty?: boolean | undefined } | undefined
+  readonly capabilities?:
+    | {
+        readonly persistentPty?: boolean | undefined
+        readonly tuiSessionSelect?: boolean | undefined
+        readonly tuiExecuteCommand?: boolean | undefined
+      }
+    | undefined
 }
 export type ServerInfoOperation<E = never> = () => Effect.Effect<ServerInfoOutput, E>
 
@@ -384,6 +390,12 @@ export type SessionInboxCancelOperation<E = never> = (
   input: SessionInboxCancelInput,
 ) => Effect.Effect<SessionInboxCancelOutput, E>
 
+export type SessionInboxWithdrawInput = { readonly sessionID: Session.ID; readonly id: SessionMessage.ID }
+export type SessionInboxWithdrawOutput = { readonly accepted: boolean }
+export type SessionInboxWithdrawOperation<E = never> = (
+  input: SessionInboxWithdrawInput,
+) => Effect.Effect<SessionInboxWithdrawOutput, E>
+
 export type SessionInboxUpdateInput = {
   readonly sessionID: Session.ID
   readonly inboxID: SessionMessage.ID
@@ -602,6 +614,17 @@ export type SessionLogOutput =
           readonly created: number
           readonly metadata?: { readonly [x: string]: unknown } | undefined
           readonly type: "session.inbox.cancelled"
+          readonly durable: { readonly aggregateID: string; readonly seq: Event.Seq; readonly version: Event.Version }
+          readonly location?:
+            | { readonly directory: AbsolutePath; readonly workspaceID?: Workspace.ID | undefined }
+            | undefined
+          readonly data: { readonly sessionID: Session.ID; readonly inboxID: SessionMessage.ID }
+        }
+      | {
+          readonly id: Event.ID
+          readonly created: number
+          readonly metadata?: { readonly [x: string]: unknown } | undefined
+          readonly type: "session.inbox.withdrawn"
           readonly durable: { readonly aggregateID: string; readonly seq: Event.Seq; readonly version: Event.Version }
           readonly location?:
             | { readonly directory: AbsolutePath; readonly workspaceID?: Workspace.ID | undefined }
@@ -1330,6 +1353,7 @@ export interface SessionApi<E = never> {
   readonly inbox: {
     readonly list: SessionInboxListOperation<E>
     readonly cancel: SessionInboxCancelOperation<E>
+    readonly withdraw: SessionInboxWithdrawOperation<E>
     readonly update: SessionInboxUpdateOperation<E>
   }
   readonly instructions: {
@@ -1681,6 +1705,47 @@ export interface CredentialApi<E = never> {
   readonly update: CredentialUpdateOperation<E>
   readonly activate: CredentialActivateOperation<E>
   readonly remove: CredentialRemoveOperation<E>
+}
+
+export type TuiSelectSessionInput = {
+  readonly sessionID: Session.ID
+  readonly client?: string | undefined
+  readonly targetDirectory?: string | undefined
+}
+export type TuiSelectSessionOutput = boolean
+export type TuiSelectSessionOperation<E = never> = (
+  input: TuiSelectSessionInput,
+) => Effect.Effect<TuiSelectSessionOutput, E>
+
+export type TuiExecuteCommandInput = {
+  readonly command:
+    | "session.list"
+    | "session.new"
+    | "session.interrupt"
+    | "session.background"
+    | "session.compact"
+    | "session.page.up"
+    | "session.page.down"
+    | "session.line.up"
+    | "session.line.down"
+    | "session.half.page.up"
+    | "session.half.page.down"
+    | "session.first"
+    | "session.last"
+    | "prompt.clear"
+    | "prompt.submit"
+    | "agent.cycle"
+    | string
+  readonly client: string
+}
+export type TuiExecuteCommandOutput = boolean
+export type TuiExecuteCommandOperation<E = never> = (
+  input: TuiExecuteCommandInput,
+) => Effect.Effect<TuiExecuteCommandOutput, E>
+
+export interface TuiApi<E = never> {
+  readonly selectSession: TuiSelectSessionOperation<E>
+  readonly executeCommand: TuiExecuteCommandOperation<E>
 }
 
 export type ProjectListInput = { readonly archived?: boolean | undefined }
@@ -2297,6 +2362,7 @@ export interface AppApi<E = never> {
   readonly integration: IntegrationApi<E>
   readonly mcp: McpApi<E>
   readonly credential: CredentialApi<E>
+  readonly tui: TuiApi<E>
   readonly project: ProjectApi<E>
   readonly form: FormApi<E>
   readonly permission: PermissionApi<E>
