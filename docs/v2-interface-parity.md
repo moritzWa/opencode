@@ -24,7 +24,7 @@ The live V1 configuration, binary, database, and server have not been changed.
 - **Tool/bash folding and links:** Keep real native tool/Markdown children. Publish source and tool anchors. Folding, wrapped/labeled link hit testing, dragging, and playback interactions belong to plugin acceptance.
 - **One attached TUI switches across directories:** Match `event.data.client` before acting, bypass the directory guard only for matching targeted commands, and set `targetDirectory` before navigation. CLI carries the client ID even for explicit `--server`. Two simultaneous production renderer instances pass exact-target command and cross-directory isolation checks.
 - **Targeted speech pause:** Matching `tui.command.execute` dispatches `speech.pause` through the ordinary keymap. Siblings ignore it. Agentview supplies the exact client and the plugin owns the command. Real detach/audio acceptance remains with integration.
-- **Skill diagnostics:** `debug skill` lists discovered skills. `debug skill --diagnostics` prints loaded, skipped, shadowed, and unadvertised source evidence from the public location-scoped endpoint. CLI handler and isolated HTTP fixture test are prepared; the core diagnostics followup supplies its generated client boundary.
+- **Skill diagnostics:** `debug skill` lists discovered skills. `debug skill --diagnostics` prints loaded, skipped, shadowed, and unadvertised source evidence from the public location-scoped endpoint. The core diagnostics followup supplies its generated client boundary. The CLI handler uses the same location envelope as `skill.list`.
 
 ## Stable plugin contract
 
@@ -75,7 +75,10 @@ Long checks run under bounded monitors. Fixtures use private state and ephemeral
 - Core API commit `e2dcb39563` was cherry-picked here as `7bcfdc4a5b`. Manager already has this dependency; integrate only the interface commits that follow it.
 - Final combined UI regression batch: 36 passed across 11 files, 131 assertions.
 - Exact-client, narrow/wide search, and withdrawal acceptance repeated ten times: 50 passed, 150 assertions. Both attached fixtures disable unrelated tab persistence; the repeat run has no persistence-cleanup errors.
-- CLI migration checks are running separately. CLI diagnostics follows the core public API followup.
+- V1 daily configuration migration and existing CLI config suite: 19 passed, 72 assertions.
+- Initial interface push ran the normal canonical full lint and typecheck hook: 34 of 34 tasks passed.
+- Core diagnostics commit `af8e18cc9d` was cherry-picked as `9228773577`. Manager should take the CLI followup commit, not this duplicate core dependency.
+- Diagnostics CLI/public HTTP fixture and daily configuration migration: 2 passed, 8 assertions. `bun typecheck` in `packages/cli` passed.
 
 ## Integration acceptance still required
 
