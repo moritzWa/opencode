@@ -63,6 +63,22 @@ The actual SDK-plugin regression compares native pages with HTTP results in both
 
 History followup checks: existing HTTP pagination tests passed (2 tests, 20 assertions); actual plugin history plus generation-cancellation tests passed ten times (20 tests, 1,970 assertions). Core Promise-tool regressions passed (3 tests, 6 assertions). Core, Plugin and Server typechecks passed.
 
+## Durable plugin instruction entries
+
+Effect and Promise plugins expose the existing `ctx.session.instructions.entry` API:
+
+- `list({sessionID})` returns `InstructionEntry.Info[]` directly.
+- `put({sessionID, key, value})` and `remove({sessionID, key})` return `void`.
+- Promise methods accept the normal second-argument request options, including `signal`.
+
+The native host resolves the target Session and its Location. Entry values retain the existing 256 KiB encoded-JSON limit, unchanged-value write suppression, durable removal tombstones and epoch-aware instruction rendering. Entries survive teardown and reopening of the application runtime and SQLite connection.
+
+The memory port uses its prompt hook to seed `memory.base`, `memory.index`, `memory.recalled` and `memory.mode` before the runner captures the first instruction baseline. Later entry changes become native chronological deltas rather than changes to an already-cached system prefix. The plugin stream owns recall budgets, ignore/resume policy, durable selected-file state and the actual-wire cache-prefix acceptance proof.
+
+Public entry access passed ten real SDK-plugin runs (810 assertions), including HTTP parity, two directories, unchanged timestamps, tombstones, invalid keys, size limits, cancelled writes and unchanged Session history. Existing runner, creation/fork and instruction-state checks passed (286 tests, 1,353 assertions).
+
+The updated plugin fixture passed its image/policy/Promise-tool checks (18 tests, 41 assertions). Core, Plugin and Server typechecks passed.
+
 ## Verification
 
 All tests, generation and typechecks use `python3 ~/.claude/scripts/heavy-job.py --wait --` from the package directory. Long checks run under bounded monitors. Dependencies were installed with the frozen lockfile in this worktree.

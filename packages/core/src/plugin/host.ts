@@ -20,6 +20,7 @@ import { Model } from "../model.js"
 import { Mcp } from "../mcp/index.js"
 import { Session } from "../session.js"
 import { SessionMessagePage } from "../session/message-page.js"
+import { InstructionEntry } from "../session/instruction-entry.js"
 import { PersistentPty } from "../persistent-pty.js"
 import { Provider } from "../provider.js"
 import { Reference } from "../reference.js"
@@ -70,6 +71,7 @@ export const make = Effect.fn("PluginHost.make")(function* (
   const permission = yield* Permission.Service
   const hooks = yield* PluginHooks.Service
   const sessions = yield* Session.Service
+  const instructionEntries = yield* InstructionEntry.Service
   const persistentPty = yield* PersistentPty.Service
   const locations = yield* LocationServiceMap.Service
   const worktrees = yield* Worktree.Service
@@ -96,6 +98,16 @@ export const make = Effect.fn("PluginHost.make")(function* (
 
   const decodeWorktree = Schema.decodeUnknownEffect(Worktree.Info)
   const decodeWorktrees = Schema.decodeUnknownEffect(Schema.Array(Worktree.ListEntry))
+
+  const withInstructionEntries = Effect.fn("PluginHost.withInstructionEntries")(function* <A, E>(
+    sessionID: Session.ID,
+    run: (entries: InstructionEntry.Interface) => Effect.Effect<A, E>,
+  ) {
+    const session = yield* sessions.get(sessionID)
+    // Prompt hooks can use their already-bound Location; other Sessions keep their own placement.
+    if (isCurrentLocation(session.location)) return yield* run(instructionEntries)
+    return yield* InstructionEntry.Service.pipe(Effect.flatMap(run), Effect.provide(locations.get(session.location)))
+  })
 
   const listAgents = Effect.fn("PluginHost.listAgents")((ref: Location.Ref) =>
     Effect.gen(function* () {
@@ -597,6 +609,13 @@ export const make = Effect.fn("PluginHost.make")(function* (
           .pipe(Effect.map((interrupted) => ({ interrupted }))),
       wait: (input) => sessions.wait(input.sessionID),
       context: (input) => sessions.context(input.sessionID),
+      instructions: {
+        entry: {
+          list: (input) => withInstructionEntries(input.sessionID, (entries) => entries.list(input.sessionID)),
+          put: (input) => withInstructionEntries(input.sessionID, (entries) => entries.put(input)),
+          remove: (input) => withInstructionEntries(input.sessionID, (entries) => entries.remove(input)),
+        },
+      },
     },
   }
   return context
@@ -626,6 +645,7 @@ export const requirements = LayerNode.group([
   Permission.node,
   PluginHooks.node,
   Session.node,
+  InstructionEntry.node,
   PersistentPty.node,
   LocationServiceMap.node,
 ])
