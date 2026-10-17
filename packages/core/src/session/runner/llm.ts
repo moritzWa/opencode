@@ -279,8 +279,9 @@ const layer = Layer.effect(
               : Effect.succeed(false),
           ),
         }).pipe(
+          // Active children recover under their existing execution owner too.
           Effect.catch((error) =>
-            userMessageID && !loaded.session.parentID && (error instanceof StepFailedError || error instanceof AIError)
+            userMessageID && (error instanceof StepFailedError || error instanceof AIError)
               ? recovery.recover({
                   sessionID,
                   userMessageID,

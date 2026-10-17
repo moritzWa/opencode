@@ -49,6 +49,16 @@ Structured followup checks:
 - AI object-generation regressions, including HTTP middleware forwarding: 6 passed.
 - AI, Core, Plugin, Server and Client typechecks passed; clients regenerated.
 
+## Active-child auth recovery
+
+Primary drains with a durable user prompt can recover inside their existing owner, including Sessions with `parentID`. That field records ancestry; `SessionRunCoordinator` owns active execution by Session ID. The migration's categorical child exclusion was a policy gate, not an execution-ownership requirement.
+
+Recovery commits the selected model and once-per-user-input marker to the child Session, then continues its recorded history. Production foreground subagent interruption propagates through `SubagentTool` to child interruption and Job cancellation. Explicit child interruption cancels the same active drain. The recovery policy remains interruptible, and a late asynchronous decision cannot schedule another owner.
+
+Background-job lifecycle and startup claim recovery keep their native ownership rules. Auxiliary title, compaction and non-runner generation calls remain outside the primary Step recovery hook. The subscription plugin's existing directory-based billing policy applies to child requests as well.
+
+The real HTTP regression uses production execution coordinators, foreground subagent jobs, the subagent tool and the write tool. It proves one child fallback request/model selection/recovery marker, retained completed tool output, unchanged parent model, and no revival after parent or child interruption even when the underlying Promise policy later sets its decision. Ten runs passed (30 tests, 680 assertions). Existing recovery/subagent regressions passed (16 tests, 72 assertions); Core and Server typechecks passed.
+
 ## Complete plugin history
 
 `ctx.session.context({sessionID})` intentionally returns the current model window, beginning at the latest completed compaction. It is not a replacement for the V1 full-message history API.
