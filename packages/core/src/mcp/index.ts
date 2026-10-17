@@ -4,7 +4,6 @@ import { Mcp } from "@opencode/schema/mcp"
 import { McpEvent } from "@opencode/schema/mcp-event"
 import { ephemeral } from "@opencode/schema/event"
 import type { Session } from "@opencode/schema/session"
-import { createHash } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import { Cause, Context, Effect, Exit, FiberSet, Latch, Layer, Schema, Scope, Semaphore, Stream, Types } from "effect"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
@@ -18,6 +17,7 @@ import { Location } from "../location.js"
 import { waitForAbort } from "@opencode/util/process"
 import { State } from "../state.js"
 import type { McpClient } from "./client.js"
+import { McpIdentity } from "./identity.js"
 
 export const ServerName = Schema.String.pipe(Schema.brand("MCP.ServerName"))
 export type ServerName = typeof ServerName.Type
@@ -178,12 +178,7 @@ export const layer = (options?: Options) =>
         const remote = entry.config
         // Key identity on name + url, not url alone: two configs for the same url under different names are
         // distinct logical servers that may hold different accounts, so they must not share a credential row.
-        const suffix =
-          "mcp_" +
-          createHash("sha1")
-            .update(name + "\u0000" + remote.url)
-            .digest("hex")
-            .slice(0, 16)
+        const suffix = McpIdentity.id(name, remote.url)
         const integrationID = Integration.ID.make(suffix)
         entry.integrationID = integrationID
         owned.add(integrationID)
