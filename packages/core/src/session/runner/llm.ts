@@ -1,6 +1,6 @@
 export * as SessionRunnerLLM from "./llm.js"
 
-import { Message } from "@opencode/ai"
+import { AIError, Message } from "@opencode/ai"
 import { and, desc, eq, inArray, sql } from "drizzle-orm"
 import { Cause, Effect, Exit, FiberMap, Layer } from "effect"
 import { Database } from "../../database/database.js"
@@ -27,6 +27,8 @@ import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { llmClient } from "../../effect/app-node-platform.js"
 import { StepFailedError } from "../error.js"
 import { SessionRunnerRetry } from "./retry.js"
+import { SessionRunnerRecovery } from "./recovery.js"
+import { PluginHooks } from "../../plugin/hooks.js"
 import { SessionStep } from "./step.js"
 import { ToolOutput } from "../../tool-output.js"
 import { Plugin } from "../../plugin.js"
@@ -51,6 +53,7 @@ const layer = Layer.effect(
     const plugins = yield* Plugin.Service
     const title = yield* SessionTitle.Service
     const steps = yield* SessionStep.make
+    const recovery = yield* SessionRunnerRecovery.make
     // Title generation starts once input is visible and must not delay model execution.
     const titles = yield* FiberMap.make<SessionSchema.ID, void, never>()
 
@@ -213,6 +216,7 @@ const layer = Layer.effect(
       const sessionID = first.session.id
       let assistantMessageID = SessionMessage.ID.create()
       const retry = yield* SessionRunnerRetry.make(bus, sessionID)
+      const userMessageID = yield* recovery.userMessageID(sessionID)
       let initial: SessionContext.Loaded | undefined = first
       let recoverOverflow = true
       let recoverContinuation = true
@@ -263,6 +267,8 @@ const layer = Layer.effect(
               model: loaded.model.ref,
               hook: prepared.retry,
               retry: proposed,
+              userMessageID,
+              assistantMessageID,
             }),
           recoverContinuation,
           recoverOverflow: Effect.suspend(() =>
@@ -272,7 +278,24 @@ const layer = Layer.effect(
                   .pipe(Effect.map((result) => result.status === "completed"))
               : Effect.succeed(false),
           ),
-        })
+        }).pipe(
+          Effect.catch((error) =>
+            userMessageID && !loaded.session.parentID && (error instanceof StepFailedError || error instanceof AIError)
+              ? recovery.recover({
+                  sessionID,
+                  userMessageID,
+                  assistantMessageID,
+                  agent: loaded.agent.id,
+                  model: loaded.model.ref,
+                  error: toSessionError(error),
+                }).pipe(Effect.flatMap((recovered) => recovered ? Effect.succeed(undefined) : Effect.fail(error)))
+              : Effect.fail(error),
+          ),
+        )
+        if (!outcome) {
+          assistantMessageID = SessionMessage.ID.create()
+          continue
+        }
         const completed = yield* SessionStep.Outcome.$match(outcome, {
           Completed: (outcome) => Effect.succeed(outcome.needsContinuation),
           Retry: (outcome) =>
@@ -403,6 +426,7 @@ export const node = makeLocationNode({
     SessionStore.node,
     SessionCompaction.node,
     Plugin.node,
+    PluginHooks.node,
     SessionTitle.node,
     Snapshot.node,
     ToolOutput.node,

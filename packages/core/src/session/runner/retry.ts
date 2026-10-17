@@ -21,6 +21,8 @@ interface Input {
   readonly model: Model.Ref
   readonly hook: (event: PluginHooks.Domains["session"]["retry"]) => Effect.Effect<void>
   readonly retry: boolean
+  readonly userMessageID?: SessionMessage.ID
+  readonly assistantMessageID?: SessionMessage.ID
 }
 
 export interface Decision {
@@ -38,6 +40,8 @@ export const policy = (sessionID: SessionSchema.ID) =>
         if (!next) return { retry: false as const }
         const event: PluginHooks.Domains["session"]["retry"] = {
           sessionID,
+          ...(input.userMessageID ? { userMessageID: input.userMessageID } : {}),
+          ...(input.assistantMessageID ? { assistantMessageID: input.assistantMessageID } : {}),
           agent: input.agent,
           model: input.model,
           error: input.error,

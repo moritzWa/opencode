@@ -128,11 +128,27 @@ export type SessionRetryDecision = { retry: false } | { retry: true; delay: numb
 
 export interface SessionRetry {
   readonly sessionID: Session.ID
+  /** Primary-loop identity; omitted by auxiliary title/generate requests. */
+  readonly userMessageID?: SessionMessage.ID
+  readonly assistantMessageID?: SessionMessage.ID
   readonly agent: Agent.ID
   readonly model: Model.Ref
   readonly error: SessionError.Error
   readonly attempt: number
   decision: SessionRetryDecision
+}
+
+/** Runs only inside an active primary drain after a failed Step. Core commits
+ * the selected model and a durable once-per-user-input recovery marker together.
+ * This hook must not interrupt or resume the Session through public APIs. */
+export interface SessionRecovery {
+  readonly sessionID: Session.ID
+  readonly userMessageID: SessionMessage.ID
+  readonly assistantMessageID: SessionMessage.ID
+  readonly agent: Agent.ID
+  readonly model: Model.Ref
+  readonly error: SessionError.Error
+  decision?: { model: Model.Ref; reason: string }
 }
 
 export interface SessionHooks {
@@ -148,6 +164,7 @@ export interface SessionHooks {
   readonly "experimental.ws.send": SessionWebSocketSend
   readonly "experimental.ws.receive": SessionWebSocketReceive
   readonly retry: SessionRetry
+  readonly recovery: SessionRecovery
 }
 
 export type SessionDomain = Pick<
