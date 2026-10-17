@@ -195,6 +195,23 @@ export interface SlotMap {
   readonly "prompt.footer": PromptFooterInput
   readonly "prompt.footer.status": PromptFooterInput
   readonly "prompt.footer.file": PromptFooterInput
+  readonly "prompt.metadata": PromptFooterInput
+  readonly "session.composer.right": { readonly sessionID: string }
+  readonly "session.footer": { readonly sessionID: string }
+  /** partID is the original zero-based message.content index, encoded as a string. */
+  readonly "session.message.text": {
+    readonly sessionID: string
+    readonly messageID: string
+    readonly partID: string
+    readonly text: string
+  }
+  readonly "session.message.tool": {
+    readonly sessionID: string
+    readonly messageID: string
+    readonly partID: string
+    readonly tool: string
+    readonly callID: string
+  }
   readonly "session.composer.top": { readonly sessionID: string }
   readonly "session.panel": PanelInput
   readonly "sidebar.content": { readonly sessionID: string }

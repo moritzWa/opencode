@@ -60,6 +60,7 @@ export const Prompt = Schema.Struct({
 }).annotate({ description: "Prompt size settings" })
 
 export const Info = Schema.Struct({
+  model_allowlist: Schema.optional(Schema.Array(Schema.String)),
   $schema: Schema.optional(Schema.String),
   theme: Schema.optional(Schema.String),
   keybinds: Schema.optional(TuiKeybind.KeybindOverrides),

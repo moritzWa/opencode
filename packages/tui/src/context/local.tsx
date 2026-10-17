@@ -1,7 +1,7 @@
-import { createStore } from "solid-js/store"
+import { createStore, produce } from "solid-js/store"
 import { dedupeWith } from "effect/Array"
 import { createSimpleContext } from "./helper"
-import { batch, createMemo, onCleanup } from "solid-js"
+import { batch, createEffect, createMemo, on, onCleanup } from "solid-js"
 import { useEvent } from "./event"
 import path from "path"
 import { useTuiPaths } from "./runtime"
@@ -19,13 +19,21 @@ import {
   type ModelPreferenceModel,
 } from "../model-preference"
 import { useTheme } from "./theme"
-import { useNewDesigns } from "../config"
+import { useConfig, useNewDesigns } from "../config"
 import { useToast } from "../ui/toast"
 import { useRoute } from "./route"
 import { useData } from "./data"
 import { usePermission } from "./permission"
 import { useLocation } from "./location"
 import { parse } from "../util/model"
+
+export function modelAllowed(allowlist: readonly string[] | undefined, model: ModelPreferenceModel) {
+  if (!allowlist?.length) return true
+  const key = `${model.providerID}/${model.modelID}`
+  return allowlist.some(
+    (pattern) => pattern === "*" || pattern === key || (pattern.endsWith("/*") && key.startsWith(pattern.slice(0, -1))),
+  )
+}
 
 export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
   name: "Local",
@@ -40,6 +48,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const event = useEvent()
     const permission = usePermission()
     const location = useLocation()
+    const config = useConfig()
+    const isModelAllowed = (model: ModelPreferenceModel) => modelAllowed(config.data.model_allowlist, model)
 
     const models = () => data.location.model.list(location.ref)
     const providers = () => data.location.provider.list(location.ref)
@@ -158,6 +168,25 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       const pendingSelectionCommits = new Map<string, { agentID: string; selection: string }>()
       const selectionKey = (value: ModelSelection) =>
         `${modelPreferenceKey(value)}:${normalizeModelVariant(value.variant) ?? "default"}`
+      createEffect(
+        on(
+          () => (route.data.type === "session" ? route.data.sessionID : undefined),
+          (_, previous) => {
+            if (!previous) return
+            setSelectionState(
+              produce((draft) => {
+                Object.entries(draft.selectionBySessionAgent[previous] ?? {}).forEach(([agent, selection]) => {
+                  if (selection && !isModelAllowed(selection)) delete draft.selectionBySessionAgent[previous]?.[agent]
+                })
+                Object.entries(draft.newSessionModelByLocationAgent).forEach(([key, model]) => {
+                  if (model && !isModelAllowed(model)) delete draft.newSessionModelByLocationAgent[key]
+                })
+              }),
+            )
+          },
+          { defer: true },
+        ),
+      )
 
       function applyPreferences(value: ModelPreference) {
         batch(() => {
@@ -196,12 +225,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         if (configured && isModelValid(configured)) return configured
 
         for (const item of preferences.recent) {
-          if (isModelValid(item)) {
+          if (isModelValid(item) && isModelAllowed(item)) {
             return item
           }
         }
 
-        const model = models()?.[0]
+        const model = models()?.find((item) => isModelAllowed({ providerID: item.providerID, modelID: item.id }))
         if (!model) return undefined
         return {
           providerID: model.providerID,
@@ -255,7 +284,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
       function durableSelection(sessionID: string): ModelSelection | undefined {
         const model = data.session.get(sessionID)?.model
-        if (!model) return
+        if (!model || !isModelAllowed({ providerID: model.providerID, modelID: model.id })) return
         return {
           providerID: model.providerID,
           modelID: model.id,
@@ -297,7 +326,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         setSessionSelection(
           sessionID,
           current.id,
-          (!session?.agent || session.agent === current.id) &&
+          isModelAllowed(selection) &&
+            (!session?.agent || session.agent === current.id) &&
             durable &&
             selectionKey(durable) === selectionKey(selection)
             ? undefined
@@ -415,7 +445,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         cycle(direction: 1 | -1) {
           const current = currentSelection()
           if (!current) return
-          const recent = preferences.recent.filter(isModelValid)
+          const recent = preferences.recent.filter((item) => isModelValid(item) && isModelAllowed(item))
           const index = recent.findIndex((x) => x.providerID === current.providerID && x.modelID === current.modelID)
           let next = index === -1 ? (direction === 1 ? 0 : recent.length - 1) : index + direction
           if (next < 0) next = recent.length - 1
@@ -425,7 +455,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           selectModel({ ...val })
         },
         cycleFavorite(direction: 1 | -1) {
-          const favorites = preferences.favorite.filter((item) => isModelValid(item))
+          const favorites = preferences.favorite.filter((item) => isModelValid(item) && isModelAllowed(item))
           if (!favorites.length) {
             toast.show({
               variant: "info",

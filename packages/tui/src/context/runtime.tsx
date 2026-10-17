@@ -22,6 +22,7 @@ export type TuiPaths = Readonly<{
 
 export type TuiTerminalEnvironment = Readonly<{
   platform: string
+  clientID?: string
   variables?: Readonly<Record<string, string>>
 }>
 

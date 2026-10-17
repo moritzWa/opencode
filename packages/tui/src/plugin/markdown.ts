@@ -1,4 +1,11 @@
-import { createMarkdownCodeBlockRenderer, type MarkdownCodeBlockRenderer } from "@opentui/core"
+import {
+  createMarkdownCodeBlockRenderer,
+  TextRenderable,
+  StyledText,
+  type MarkdownCodeBlockRenderer,
+  type MarkdownOptions,
+  type Renderable,
+} from "@opentui/core"
 import { isShallowEqual } from "remeda"
 import { createMemo } from "solid-js"
 
@@ -12,7 +19,31 @@ export function createMarkdownRenderer(
     undefined,
     { equals: isShallowEqual },
   )
-  return createMemo(() =>
-    Object.keys(renderers()).length === 0 ? undefined : createMarkdownCodeBlockRenderer(renderers()),
+  return createMemo(() => {
+    const code = createMarkdownCodeBlockRenderer(renderers())
+    const render: NonNullable<MarkdownOptions["renderNode"]> = (token, context) => {
+      if (token.type !== "list") return code?.(token, context)
+      const node = context.defaultRender()
+      if (node) {
+        fillBullets(node)
+        // Built-in list reconciliation reassigns marker chunks during streaming and restyling.
+        node.onLifecyclePass = () => fillBullets(node)
+      }
+      return node
+    }
+    return render
+  })
+}
+
+function fillBullets(node: Renderable) {
+  if (
+    node instanceof TextRenderable &&
+    node.id.endsWith("-marker") &&
+    node.chunks
+      .map((chunk) => chunk.text)
+      .join("")
+      .trim() === "-"
   )
+    node.content = new StyledText(node.chunks.map((chunk) => ({ ...chunk, text: chunk.text.replace("-", "●") })))
+  node.getChildren().forEach((child) => fillBullets(child as Renderable))
 }

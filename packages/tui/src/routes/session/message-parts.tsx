@@ -15,6 +15,8 @@ import { Locale } from "../../util/locale"
 import { use } from "./render-context"
 import { generateThinkingSyntax } from "./thinking-syntax"
 import { canonicalToolName } from "../../util/tool-display"
+import { Slot } from "../../plugin/render"
+import { searchable } from "./search"
 
 export const INLINE_TOOL_ICON_WIDTH = 2
 
@@ -168,6 +170,7 @@ function ReasoningHeader(props: {
 
 export function TextPart(props: {
   last: boolean
+  partID?: string
   part: SessionMessageAssistantText
   message: SessionMessageAssistant
 }) {
@@ -177,19 +180,34 @@ export function TextPart(props: {
   const plugins = usePlugin()
   return (
     <Show when={props.part.text.trim()}>
-      <box paddingLeft={3} flexShrink={0}>
-        {/* Configure custom nodes before parsing; apply content before streaming so completion keeps the final tokens. */}
-        <markdown
-          syntaxStyle={syntax()}
-          renderNode={plugins.markdown()}
-          content={props.part.text.trim()}
-          streaming={props.message.time.completed === undefined}
-          internalBlockMode="top-level"
-          tableOptions={{ style: "grid", cellPaddingX: 1 }}
-          conceal={ctx.markdownMode() === "rendered"}
-          fg={theme.markdown.text}
-          bg={theme.background.base}
-        />
+      <box
+        id={`message:${props.message.id}:part:${props.partID ?? props.message.content.indexOf(props.part)}`}
+        paddingLeft={3}
+        flexShrink={0}
+      >
+        <Slot
+          path="session.message.text"
+          input={{
+            sessionID: ctx.sessionID,
+            messageID: props.message.id,
+            partID: props.partID ?? String(props.message.content.indexOf(props.part)),
+            text: props.part.text,
+          }}
+        >
+          {/* Configure custom nodes before parsing; apply content before streaming so completion keeps the final tokens. */}
+          <markdown
+            ref={(node) => searchable.add(node)}
+            syntaxStyle={syntax()}
+            renderNode={plugins.markdown()}
+            content={props.part.text.trim()}
+            streaming={props.message.time.completed === undefined}
+            internalBlockMode="top-level"
+            tableOptions={{ style: "grid", cellPaddingX: 1 }}
+            conceal={ctx.markdownMode() === "rendered"}
+            fg={theme.markdown.text}
+            bg={theme.background.base}
+          />
+        </Slot>
       </box>
     </Show>
   )

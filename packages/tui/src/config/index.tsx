@@ -67,6 +67,10 @@ export const Cursor = Schema.Struct({
 }).annotate({ description: "Terminal cursor settings" })
 
 export const Info = Schema.Struct({
+  model_allowlist: Schema.optional(Schema.Array(Schema.String)).annotate({
+    description:
+      "Models eligible for automatic selection and cycling: provider/model, provider/*, or *. Manual selection remains unrestricted",
+  }),
   theme: Schema.optional(
     Schema.Struct({
       name: Schema.optional(Schema.String).annotate({ description: "Theme name" }),
@@ -138,6 +142,7 @@ export const Info = Schema.Struct({
   ).annotate({ description: "Terminal integration settings" }),
   prompt: Schema.optional(
     Schema.Struct({
+      hints: Schema.optional(Schema.Boolean).annotate({ description: "Show keyboard hints below the prompt" }),
       editor: Schema.optional(Schema.Boolean).annotate({
         description: "Include the active editor file or selection as prompt context",
       }),

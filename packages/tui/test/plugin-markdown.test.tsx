@@ -72,11 +72,37 @@ test("effective mappings preserve identity through reordered and shadowed contri
       setSources([{ example: first, other: first }])
       expect(renderNode()).not.toBe(initial)
       setSources([])
-      expect(renderNode()).toBeUndefined()
+      expect(renderNode()).toBeFunction()
     } finally {
       dispose()
     }
   })
+})
+
+test("unordered lists use filled bullets while numbered lists retain their numbers", async () => {
+  const output = await createTestRenderer({ width: 80, height: 12, remote: true, useThread: false })
+  await render(() => {
+    const renderNode = createMarkdownRenderer(() => [])
+    return (
+      <markdown
+        syntaxStyle={SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } })}
+        renderNode={renderNode()}
+        content={"- alpha\n- beta\n\n1. one\n2. two"}
+        streaming={false}
+        internalBlockMode="top-level"
+      />
+    )
+  }, output.renderer)
+  try {
+    output.renderer.start()
+    await output.waitForFrame((frame) => frame.includes("alpha") && frame.includes("two"))
+    expect(output.captureCharFrame()).toContain("● alpha")
+    expect(output.captureCharFrame()).toContain("● beta")
+    expect(output.captureCharFrame()).toContain("1. one")
+    expect(output.captureCharFrame()).toContain("2. two")
+  } finally {
+    output.renderer.destroy()
+  }
 })
 
 test("changing and removing a Markdown handler refreshes existing messages", async () => {

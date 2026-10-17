@@ -20,6 +20,15 @@ type Setting = {
 
 export const settings: Setting[] = [
   {
+    title: "Prompt footer hints",
+    category: "Appearance",
+    path: ["prompt", "hints"],
+    default: true,
+    values: [false, true],
+    labels: ["hide", "show"],
+    keywords: ["shortcuts", "footer", "hints"],
+  },
+  {
     title: "Theme",
     category: "Appearance",
     path: ["theme", "name"],

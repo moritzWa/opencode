@@ -36,25 +36,29 @@ export function DialogModel(props: { providerID?: string }) {
 
     function toOptions(items: typeof favorites, category: string) {
       if (!showSections) return []
-      return items.flatMap((item) => {
-        const model = models().find((model) => model.providerID === item.providerID && model.id === item.modelID)
-        if (!model) return []
-        const provider = providers().get(model.providerID)
-        return [
-          {
-            key: item,
-            value: { providerID: model.providerID, modelID: model.id },
-            title: model.name,
-            releaseDate: model.time.released,
-            description: provider?.name ?? model.providerID,
-            category,
-            footer: free(model) ? "Free" : undefined,
-            onSelect: () => {
-              onSelect(model.providerID, model.id)
+      return items
+        .flatMap((item) => {
+          const model = models().find((model) => model.providerID === item.providerID && model.id === item.modelID)
+          if (!model) return []
+          const provider = providers().get(model.providerID)
+          return [
+            {
+              key: item,
+              value: { providerID: model.providerID, modelID: model.id },
+              title: model.name,
+              releaseDate: model.time.released,
+              description: provider?.name ?? model.providerID,
+              category: category === "Recent" ? `Recent · ${provider?.name ?? model.providerID}` : category,
+              footer: free(model) ? "Free" : undefined,
+              onSelect: () => {
+                onSelect(model.providerID, model.id)
+              },
             },
-          },
-        ]
-      })
+          ]
+        })
+        .toSorted((a, b) =>
+          category === "Recent" ? a.category.localeCompare(b.category) || a.title.localeCompare(b.title) : 0,
+        )
     }
 
     const favoriteOptions = toOptions(favorites, "Favorites")

@@ -182,6 +182,7 @@ export function migrateV1(legacy: TuiConfigV1.Info | undefined, kv: Record<strin
         )
 
   return {
+    ...(legacy?.model_allowlist === undefined ? {} : { model_allowlist: legacy.model_allowlist }),
     ...(themeName !== undefined || themeMode !== undefined
       ? {
           theme: {
@@ -226,10 +227,13 @@ export function migrateV1(legacy: TuiConfigV1.Info | undefined, kv: Record<strin
           },
         }),
     ...(kv.terminal_title_enabled === undefined ? {} : { terminal: { title: kv.terminal_title_enabled } }),
-    ...(kv.file_context_enabled === undefined && kv.paste_summary_enabled === undefined
+    ...(kv.file_context_enabled === undefined &&
+    kv.paste_summary_enabled === undefined &&
+    kv.footer_hints_enabled === undefined
       ? {}
       : {
           prompt: {
+            ...(kv.footer_hints_enabled === undefined ? {} : { hints: kv.footer_hints_enabled }),
             ...(kv.file_context_enabled === undefined ? {} : { editor: kv.file_context_enabled }),
             ...(kv.paste_summary_enabled === undefined
               ? {}

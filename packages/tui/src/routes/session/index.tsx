@@ -123,6 +123,7 @@ import { isRecord } from "../../util/record"
 import { createHistoryPrepend } from "./history"
 import { context, use, type PendingAction } from "./render-context"
 import { INLINE_TOOL_ICON_WIDTH, InlineToolRow, ReasoningPart, TextPart, toolDisplay } from "./message-parts"
+import { createSessionSearch, SessionSearchBar, searchable } from "./search"
 import { defaultVerbosity, type GroupKind, type SessionEntry } from "./grouping/session"
 import { SessionGroupView } from "./group-view"
 import { useEntryAnchor } from "./anchor-view"
@@ -623,6 +624,12 @@ export function Session(props: {
   })
   const dialog = useDialog()
   const renderer = useRenderer()
+  const search = createSessionSearch({
+    scroll: () => scroll,
+    content: () => [visibleRows(), messages(), markdownMode()],
+    prepare: () => new Promise<void>((resolve) => ensureAllRows(resolve)),
+  })
+  createEffect(on(() => route.sessionID, search.close, { defer: true }))
   const runPendingAction = createSingleFlight<string>()
   const mutatePending = async (action: PendingAction, inboxID: string, failureLabel?: string) => {
     const result = await runPendingAction(inboxID, async () => {
@@ -822,6 +829,16 @@ export function Session(props: {
   ]
 
   const baseAndUnfocusedCommands = [
+    {
+      id: "session.search",
+      title: "Find in session",
+      group: "Session",
+      slash: { name: "search", aliases: ["find"] },
+      run: () => {
+        dialog.clear()
+        void search.open()
+      },
+    },
     {
       id: "session.first",
       title: "First message",
@@ -1390,6 +1407,7 @@ export function Session(props: {
           <Show when={session()}>
             <box flexGrow={1} minHeight={0} position="relative">
               <scrollbox
+                id={`session:${route.sessionID}:transcript`}
                 ref={(r) => {
                   scroll = r
                   props.scrollRef?.(r)
@@ -1407,7 +1425,7 @@ export function Session(props: {
                     foregroundColor: theme.border.base,
                   },
                 }}
-                stickyScroll={!navigationMessage() && !navigationSlack()}
+                stickyScroll={!search.active() && !navigationMessage() && !navigationSlack()}
                 stickyStart="bottom"
                 flexGrow={1}
                 scrollAcceleration={scrollAcceleration()}
@@ -1437,6 +1455,7 @@ export function Session(props: {
                 <Show when={navigationSlack()}>
                   {(height) => <box id={NAVIGATION_SLACK_ID} height={height()} flexShrink={0} />}
                 </Show>
+                <box id={`session:${route.sessionID}:bottom`} height={0} flexShrink={0} />
               </scrollbox>
             </box>
             <box height={1} flexShrink={0} flexDirection="row" justifyContent="flex-end">
@@ -1459,6 +1478,7 @@ export function Session(props: {
                 </box>
               </Show>
             </box>
+            <Slot path="session.footer" input={{ sessionID: route.sessionID }} />
             <box flexShrink={0}>
               <Show when={!composer.open && !disabled() && queuedPrompts().length > 0}>
                 <QueuedPromptDock prompts={queuedPrompts()} onOpen={openQueuedPrompts} />
@@ -1510,6 +1530,9 @@ export function Session(props: {
                     projectID={session()!.projectID}
                     sessionID={route.sessionID}
                   />
+                </Match>
+                <Match when={search.active()}>
+                  <SessionSearchBar search={search} />
                 </Match>
                 <Match when={!disabled()}>
                   <Prompt
@@ -1846,6 +1869,7 @@ function SessionPartView(props: {
   message: (messageID: string) => SessionMessageInfo | undefined
   images?: boolean
 }) {
+  const ctx = use()
   const message = createMemo(() => props.message(props.partRef.messageID))
   const part = createMemo(() => {
     const item = message()
@@ -1858,6 +1882,7 @@ function SessionPartView(props: {
         <Switch>
           <Match when={item().type === "text"}>
             <TextPart
+              partID={String((message() as SessionMessageAssistant).content.indexOf(item()))}
               part={item() as SessionMessageAssistantText}
               message={message() as SessionMessageAssistant}
               last={false}
@@ -1871,7 +1896,20 @@ function SessionPartView(props: {
             />
           </Match>
           <Match when={item().type === "tool"}>
-            <ToolPart part={item() as SessionMessageAssistantTool} images={props.images} />
+            <box id={`message:${props.partRef.messageID}:tool:${props.partRef.partID}`} flexShrink={0}>
+              <Slot
+                path="session.message.tool"
+                input={{
+                  sessionID: ctx.sessionID,
+                  messageID: props.partRef.messageID,
+                  partID: String((message() as SessionMessageAssistant).content.indexOf(item())),
+                  tool: (item() as SessionMessageAssistantTool).name,
+                  callID: props.partRef.partID,
+                }}
+              >
+                <ToolPart part={item() as SessionMessageAssistantTool} images={props.images} />
+              </Slot>
+            </box>
           </Match>
         </Switch>
       )}
@@ -2288,7 +2326,9 @@ function UserMessage(props: { message: SessionMessageUser }) {
           backgroundColor={hover() ? theme.decrease(theme.background.raised.base) : theme.background.raised.base}
           flexShrink={0}
         >
-          <text fg={theme.text.base}>{props.message.text}</text>
+          <text ref={(node) => searchable.add(node)} fg={theme.text.base}>
+            {props.message.text}
+          </text>
           <Show when={skills().length}>
             <box flexDirection="row" paddingTop={1} gap={1} flexWrap="wrap">
               <For each={skills()}>

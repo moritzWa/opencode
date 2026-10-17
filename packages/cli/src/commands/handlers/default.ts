@@ -141,6 +141,7 @@ export default Runtime.handler(Commands, (input) =>
         prepare: (spec, install = true) => runPromise(install ? npm.add(spec) : npm.resolve(spec)),
       },
       environment: requestedServer === undefined ? Env.session() : undefined,
+      clientID: process.env.OPENCODE_TUI_CLIENT_ID,
       terminalHandoff: () => preflight.finish(),
       log: (level, message, tags) => {
         const effect =

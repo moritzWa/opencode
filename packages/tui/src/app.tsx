@@ -196,6 +196,7 @@ export type TuiInput = {
   updater?: UpdateSource
   packages: PackageSource
   environment?: Readonly<Record<string, string>>
+  clientID?: string
   terminalHandoff?: () => Promise<
     | {
         readonly renderer: CliRenderer
@@ -335,6 +336,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                             <TuiTerminalEnvironmentProvider
                               value={{
                                 platform: process.platform,
+                                clientID: input.clientID,
                                 variables: input.environment,
                               }}
                             >
@@ -618,7 +620,7 @@ function App() {
         return
       }
 
-      renderer.setTerminalTitle(`OC | ${title.length > 40 ? title.slice(0, 37) + "…" : title}`)
+      renderer.setTerminalTitle(title)
       return
     }
 
@@ -1292,7 +1294,10 @@ function App() {
   }))
 
   event.on("tui.command.execute", (evt, { directory }) => {
-    if (directory !== (location.current?.directory ?? data.location.default().directory)) return
+    if (evt.data.client) {
+      if (evt.data.client !== (terminalEnvironment.clientID ?? terminalEnvironment.variables?.OPENCODE_TUI_CLIENT_ID))
+        return
+    } else if (directory !== (location.current?.directory ?? data.location.default().directory)) return
     keymap.dispatch(evt.data.command)
   })
 
@@ -1307,7 +1312,11 @@ function App() {
   })
 
   event.on("tui.session.select", (evt, { directory }) => {
-    if (directory !== (location.current?.directory ?? data.location.default().directory)) return
+    if (evt.data.client) {
+      if (evt.data.client !== (terminalEnvironment.clientID ?? terminalEnvironment.variables?.OPENCODE_TUI_CLIENT_ID))
+        return
+    } else if (directory && directory !== (location.current?.directory ?? data.location.default().directory)) return
+    if (evt.data.targetDirectory) location.set({ directory: evt.data.targetDirectory })
     route.navigate({
       type: "session",
       sessionID: evt.data.sessionID,

@@ -33,6 +33,7 @@ import { createStore, produce, unwrap } from "solid-js/store"
 import { emptyPrompt, usePromptHistory, type PromptInfo, type PromptPartRef } from "../../prompt/history"
 import { saveDraft, takeDraft } from "./draft-stash"
 import { Skill } from "@opencode/schema/skill"
+import { SessionMessage } from "@opencode/schema/session-message"
 import { computePromptTraits } from "../../prompt/traits"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
 import { usePromptStash } from "../../prompt/stash"
@@ -99,6 +100,11 @@ export type PromptRef = {
 
 const DRAFT_RETENTION_MIN_CHARS = 20
 const revealedPromptMetadata = new WeakSet<object>()
+// Kept across the home-to-session composer remount, but never shared with sibling TUIs.
+const submittedPrompts = new Map<
+  string,
+  { id: string; prompt: PromptInfo; cursor: number; admitted: Promise<unknown> }
+>()
 
 function randomIndex(count: number) {
   if (count <= 0) return 0
@@ -183,6 +189,7 @@ function argumentSlash(input: string, commands: readonly KeymapCommand[]) {
 }
 
 export function Prompt(props: PromptProps) {
+  const [submittedID, setSubmittedID] = createSignal(props.sessionID ? submittedPrompts.get(props.sessionID)?.id : undefined)
   let input: TextareaRenderable
   let anchor: BoxRenderable
   const [inputTarget, setInputTarget] = createSignal<TextareaRenderable | undefined>()
@@ -501,7 +508,7 @@ export function Prompt(props: PromptProps) {
         name: "session.interrupt",
         category: "Session",
         palette: undefined,
-        enabled: status() === "running",
+        enabled: status() === "running" || submittedID() !== undefined,
         run: () => {
           if (auto()?.visible) return
           if (!input.focused) return
@@ -519,10 +526,28 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            void client.api.session.interrupt({
-              sessionID: props.sessionID,
-              resume: true,
-            })
+            const sessionID = props.sessionID
+            const submitted = submittedPrompts.get(sessionID)
+            void (async () => {
+              if (submitted) {
+                await submitted.admitted
+                const { accepted } = await client.api.session.inbox.withdraw({ sessionID, id: submitted.id })
+                submittedPrompts.delete(sessionID)
+                setSubmittedID(undefined)
+                if (accepted) {
+                  if (disposed || input.isDestroyed || props.sessionID !== sessionID) {
+                    saveDraft(sessionID, { prompt: submitted.prompt, cursor: submitted.cursor })
+                    return
+                  }
+                  if (store.prompt.text || store.prompt.files?.length)
+                    stash.push({ prompt: { ...unwrap(store.prompt) } })
+                  ref.set(submitted.prompt)
+                  input.cursorOffset = submitted.cursor
+                  return
+                }
+              }
+              await client.api.session.interrupt({ sessionID, resume: true })
+            })().catch((error) => toast.show({ variant: "error", message: errorMessage(error) }))
             setStore("interrupt", 0)
           }
           dialog.clear()
@@ -1180,7 +1205,8 @@ export function Prompt(props: PromptProps) {
     // (which may have absorbed mid-flight typing). Failure paths restore the
     // snapshot unless the user has started typing something new.
     const currentMode = store.mode
-    const entry = { ...store.prompt, mode: currentMode }
+    const cursor = input.cursorOffset
+    const entry = { ...unwrap(store.prompt), mode: currentMode }
     if (trimmed) {
       resetComposer()
       props.onSubmit?.()
@@ -1355,8 +1381,10 @@ export function Prompt(props: PromptProps) {
       // and rolls back if the server rejects it, so submission does not wait
       // on the network. On rejection the row is already rolled back; restore
       // the composer unless the user has started typing something new.
-      data.session
+      const id = SessionMessage.ID.create()
+      const admitted = data.session
         .prompt({
+          id,
           sessionID: target,
           text: inputText,
           files: entry.files,
@@ -1369,7 +1397,13 @@ export function Prompt(props: PromptProps) {
           // the server makes an unchanged selection a no-op.
           prepare: commitModel,
         })
-        .catch((error) => (newSession ? newSession.recover(error) : fail("Failed to send prompt", error)))
+        .catch((error) => {
+          submittedPrompts.delete(target)
+          setSubmittedID(undefined)
+          return newSession ? newSession.recover(error) : fail("Failed to send prompt", error)
+        })
+      submittedPrompts.set(target, { id, prompt: structuredClone(entry), cursor, admitted })
+      setSubmittedID(id)
       if (pendingEditorSelection) editor.markSelectionSent()
     }
 
@@ -1589,6 +1623,34 @@ export function Prompt(props: PromptProps) {
     sessionID: props.sessionID,
     mode: store.mode,
     showDetails: store.interrupt === 0 || dimensions().width >= 80,
+  })
+  const runningSubagents = createMemo(() =>
+    props.sessionID
+      ? data.session
+          .family(props.sessionID)
+          .filter((id) => id !== props.sessionID && data.session.status(id) === "running")
+      : [],
+  )
+  createEffect(() => {
+    if (!props.sessionID) return
+    const messages = data.session.message.list(props.sessionID)
+    const submitted = submittedPrompts.get(props.sessionID)
+    if (!submitted) return
+    const index = messages.findIndex((message) => message.id === submitted.id)
+    if (index < 0) return
+    if (
+      messages
+        .slice(index + 1)
+        .some(
+          (message) =>
+            message.type === "assistant" &&
+            message.content.some((part) => part.type === "tool" || (part.type === "text" && part.text.length > 0)),
+        )
+    )
+      {
+        submittedPrompts.delete(props.sessionID)
+        setSubmittedID(undefined)
+      }
   })
 
   const placeholderText = createMemo(() => {
@@ -1845,6 +1907,10 @@ export function Prompt(props: PromptProps) {
                 modelAlpha={modelMetaAlpha()}
                 variantAlpha={variantMetaAlpha()}
               />
+              <Slot path="prompt.metadata" input={footerInput()} />
+              <Show when={props.sessionID}>
+                {(sessionID) => <Slot path="session.composer.right" input={{ sessionID: sessionID() }} />}
+              </Show>
             </box>
           </box>
         </box>
@@ -1902,6 +1968,19 @@ export function Prompt(props: PromptProps) {
                         warning={theme.text.feedback.warning.base}
                         flash={theme.decrease(theme.text.feedback.warning.base, 2)}
                       />
+                      <Show when={runningSubagents().length}>
+                        <text
+                          fg={theme.text.muted}
+                          wrapMode="none"
+                          truncate
+                          flexShrink={1}
+                          onMouseUp={() => keymap.dispatch("session.child.first")}
+                        >
+                          {dimensions().width < 60
+                            ? `· ${runningSubagents().length} agents`
+                            : `· ${runningSubagents().length} subagent${runningSubagents().length === 1 ? "" : "s"} running`}
+                        </text>
+                      </Show>
                     </box>
                   </Match>
                   <Match when={move.progress()}>

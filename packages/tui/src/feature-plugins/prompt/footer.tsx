@@ -5,6 +5,7 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { TextAttributes } from "@opentui/core"
 import { useInteractivity } from "../../context/interactivity"
 import { stringWidth } from "../../util/string-width"
+import { useConfig } from "../../config"
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -16,11 +17,13 @@ export function PromptFooter(props: {
   sessionID?: string
   mode: "normal" | "shell"
   showDetails: boolean
+  hints?: boolean
 }) {
   const dimensions = useTerminalDimensions()
   const [liveHovered, setLiveHovered] = createSignal(false)
   const subagents = createMemo(() => {
     if (!props.sessionID) return 0
+    if (props.context.data.session.status(props.sessionID) === "running") return 0
     const count = props.context.data.session
       .family(props.sessionID)
       .filter((id) => id !== props.sessionID && props.context.data.session.status(id) === "running").length
@@ -96,7 +99,7 @@ export function PromptFooter(props: {
               </Show>
             </box>
           </Match>
-          <Match when={props.showDetails && layout().shortcuts}>
+          <Match when={props.hints !== false && props.showDetails && layout().shortcuts}>
             <text
               fg={interactive() ? props.context.theme.text.base : props.context.theme.text.action.primary.disabled}
               attributes={interactive() ? 0 : TextAttributes.DIM}
@@ -107,7 +110,7 @@ export function PromptFooter(props: {
             </text>
           </Match>
         </Switch>
-        <Show when={props.showDetails && layout().shortcuts}>
+        <Show when={props.hints !== false && props.showDetails && layout().shortcuts}>
           <text
             fg={interactive() ? props.context.theme.text.base : props.context.theme.text.action.primary.disabled}
             attributes={interactive() ? 0 : TextAttributes.DIM}
@@ -134,10 +137,17 @@ export function PromptFooter(props: {
 export default Plugin.define({
   id: "opencode.prompt.footer",
   setup(context) {
+    const config = useConfig()
     context.ui.slot({
       append: "prompt.footer",
       render: (props) => (
-        <PromptFooter context={context} sessionID={props.sessionID} mode={props.mode} showDetails={props.showDetails} />
+        <PromptFooter
+          context={context}
+          sessionID={props.sessionID}
+          mode={props.mode}
+          showDetails={props.showDetails}
+          hints={config.data.prompt?.hints}
+        />
       ),
     })
   },
