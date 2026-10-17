@@ -1,5 +1,5 @@
 import type { OpenCodeClient } from "@opencode/client"
-import type { CredentialApi, GenerateApi, PluginApi } from "@opencode/client/promise/api"
+import type { CredentialApi, GenerateApi, MessageApi, PluginApi } from "@opencode/client/promise/api"
 import type { Location } from "@opencode/schema/location"
 import type { PluginOptions } from "../options.js"
 import type { App } from "../app.js"
@@ -37,6 +37,7 @@ export interface Context {
   }
   readonly integration: IntegrationDomain
   readonly mcp: MCPDomain
+  readonly message: MessageApi
   readonly model: ModelDomain
   readonly generate: GenerateApi
   readonly permission: PermissionDomain

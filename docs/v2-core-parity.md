@@ -49,6 +49,20 @@ Structured followup checks:
 - AI object-generation regressions, including HTTP middleware forwarding: 6 passed.
 - AI, Core, Plugin, Server and Client typechecks passed; clients regenerated.
 
+## Complete plugin history
+
+`ctx.session.context({sessionID})` intentionally returns the current model window, beginning at the latest completed compaction. It is not a replacement for the V1 full-message history API.
+
+Promise and Effect plugins expose the existing `MessageApi` as `ctx.message.list`. It returns **`{data: messages, cursor: {previous?, next?}}`**, including pre-compaction rows and unfinished assistant output. The native host and existing HTTP message handler share `SessionMessagePage.list`, preserving the same opaque cursors and ordering without a Core runtime dependency on Protocol or Client.
+
+For a chronological full scan, request `{sessionID, limit: 200, order: "asc"}` first. Follow `cursor.next` with `{sessionID, limit: 200, cursor}` and no `order`; stop when `data` is empty. Preserve the same `type` filter when following cursors. Promise calls accept `RequestOptions.signal` for cancellation.
+
+Legacy memory/peers `messages` and `message(id)` adapters use these raw pages. Model-context transforms and unchanged-read suppression keep using current context intentionally. No model-history selection, compaction behavior, transfer filtering or HTTP routes change.
+
+The actual SDK-plugin regression compares native pages with HTTP results in both orders at page sizes 1, 2, 3 and 8. It covers reverse pagination, exact IDs without duplicates, pre-compaction rows, running partial assistant output, type filters, cross-session anchors and invalid-cursor messages. An already-aborted signal is rejected before synchronous native reads begin; a subsequent uncancelled read still succeeds without mutation.
+
+History followup checks: existing HTTP pagination tests passed (2 tests, 20 assertions); actual plugin history plus generation-cancellation tests passed ten times (20 tests, 1,970 assertions). Core Promise-tool regressions passed (3 tests, 6 assertions). Core, Plugin and Server typechecks passed.
+
 ## Verification
 
 All tests, generation and typechecks use `python3 ~/.claude/scripts/heavy-job.py --wait --` from the package directory. Long checks run under bounded monitors. Dependencies were installed with the frozen lockfile in this worktree.

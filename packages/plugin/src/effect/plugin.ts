@@ -1,4 +1,4 @@
-import type { CredentialApi, ExperimentalApi, GenerateApi, PluginApi } from "@opencode/client/effect/api"
+import type { CredentialApi, ExperimentalApi, GenerateApi, MessageApi, PluginApi } from "@opencode/client/effect/api"
 import type { Location } from "@opencode/schema/location"
 import type { Effect, Scope } from "effect"
 import type { PluginOptions } from "../options.js"
@@ -37,6 +37,7 @@ export interface Context {
   }
   readonly integration: IntegrationDomain
   readonly mcp: MCPDomain
+  readonly message: MessageApi<unknown>
   readonly model: ModelDomain
   readonly generate: GenerateApi<unknown>
   readonly permission: PermissionDomain

@@ -230,6 +230,7 @@ export function fromPromise(plugin: Plugin) {
         const GenerateEndpoints = ClientApi.groups["server.generate"].endpoints
         const IntegrationEndpoints = ClientApi.groups["server.integration"].endpoints
         const McpEndpoints = ClientApi.groups["server.mcp"].endpoints
+        const MessageEndpoints = ClientApi.groups["server.message"].endpoints
         const ModelEndpoints = ClientApi.groups["server.model"].endpoints
         const PluginEndpoints = ClientApi.groups["server.plugin"].endpoints
         const PermissionEndpoints = ClientApi.groups["server.permission"].endpoints
@@ -267,8 +268,15 @@ export function fromPromise(plugin: Plugin) {
           method: (input: never) => Effect.Effect<unknown, unknown>,
         ) => {
           const compiled = compileEndpoint(endpoint)
-          return ((input?: unknown, options?: { readonly signal?: AbortSignal }) =>
-            Effect.gen(function* () {
+          return ((input?: unknown, options?: { readonly signal?: AbortSignal }) => {
+            const signal =
+              options?.signal ??
+              (compiled.decode.length === 0
+                ? (input as { readonly signal?: AbortSignal } | undefined)?.signal
+                : undefined)
+            // Effect runs synchronous work before attaching its abort listener.
+            if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"))
+            return Effect.gen(function* () {
               // Match the generated Promise client, whose request body crosses JSON before endpoint decoding.
               const normalized = yield* Schema.encodeUnknownEffect(JsonInput)(input ?? {}).pipe(
                 Effect.flatMap(Schema.decodeUnknownEffect(JsonInput)),
@@ -277,15 +285,8 @@ export function fromPromise(plugin: Plugin) {
               const result = yield* method(Object.assign({}, ...decoded) as never)
               if (compiled.noContent) return undefined
               return yield* compiled.encode(result)
-            }).pipe((effect) =>
-              Effect.runPromiseWith(runtime)(effect, {
-                signal:
-                  options?.signal ??
-                  (compiled.decode.length === 0
-                    ? (input as { readonly signal?: AbortSignal } | undefined)?.signal
-                    : undefined),
-              }),
-            )) as PromiseMethod
+            }).pipe((effect) => Effect.runPromiseWith(runtime)(effect, { signal }))
+          }) as PromiseMethod
         }
 
         const transform =
@@ -352,6 +353,9 @@ export function fromPromise(plugin: Plugin) {
           },
           generate: {
             text: adaptApiMethod(GenerateEndpoints["generate.text"], host.generate.text),
+          },
+          message: {
+            list: adaptApiMethod(MessageEndpoints["session.messages"], host.message.list),
           },
           model: {
             list: adaptApiMethod(ModelEndpoints["model.list"], host.model.list),

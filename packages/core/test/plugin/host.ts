@@ -28,6 +28,9 @@ export function host(overrides: Overrides = {}): Plugin.Context {
         },
       }),
     options: {},
+    message: overrides.message ?? {
+      list: () => Effect.die("unused message.list"),
+    },
     rpc:
       overrides.rpc ??
       Object.assign(

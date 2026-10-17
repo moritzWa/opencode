@@ -19,6 +19,7 @@ import { LocationServiceMap } from "../location-service-map.js"
 import { Model } from "../model.js"
 import { Mcp } from "../mcp/index.js"
 import { Session } from "../session.js"
+import { SessionMessagePage } from "../session/message-page.js"
 import { PersistentPty } from "../persistent-pty.js"
 import { Provider } from "../provider.js"
 import { Reference } from "../reference.js"
@@ -116,6 +117,9 @@ export const make = Effect.fn("PluginHost.make")(function* (
     app,
     location: locationInfo(),
     options: {},
+    message: {
+      list: (input) => SessionMessagePage.list(input, sessions.messages),
+    },
     rpc: Object.assign(rpc.client, { register: rpc.register }),
     agent: {
       get: (input) => {
