@@ -11,7 +11,7 @@ import { Project } from "@opencode/core/project"
 import { ProjectTable } from "@opencode/core/project/sql"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Global } from "@opencode/util/global"
-import { Effect, Fiber, Layer, Logger, Schedule, Schema, Scope } from "effect"
+import { Effect, Layer, Logger, Schedule, Schema, Scope } from "effect"
 import { eq, sql } from "drizzle-orm"
 import type { SqlClient } from "effect/sql/SqlClient"
 import { tmpdir } from "./fixture/tmpdir"
@@ -127,6 +127,18 @@ const transform = (messages: V1Migration.SourceMessage[], parts: V1Migration.Sou
 }
 
 describe("V1Migration.transformSession", () => {
+  test("imports historical assistants without agent instead of losing their text", () => {
+    const result = transform(
+      [user("msg_old_user"), assistant("msg_old_assistant", "msg_old_user", { agent: undefined })],
+      [part("prt_old", "msg_old_assistant", { type: "text", text: "historical answer" })],
+    )
+    expect(result.warnings).toEqual([])
+    expect(result.messages[1]?.data).toMatchObject({
+      agent: "build",
+      content: [{ type: "text", text: "historical answer" }],
+    })
+  })
+
   test("maps ordinary user text, agents, ignored fields, order, and timestamps", () => {
     const message = user("msg_000000000001aaaaaaaaaaaaaa", {
       system: "discard",
@@ -821,11 +833,12 @@ describe("V1Migration.transformSession", () => {
 })
 
 describe("V1Migration database workflow", () => {
+  // V1 table columns and relationships from origin/v1 packages/core/src/session/sql.ts.
   const createLegacyTables = Effect.fnUntraced(function* (db: Effect.Success<typeof makeDb>) {
     yield* db.run(sql`
       CREATE TABLE session (
         id text PRIMARY KEY,
-        project_id text NOT NULL,
+        project_id text NOT NULL REFERENCES project(id) ON DELETE CASCADE,
         workspace_id text,
         parent_id text,
         slug text NOT NULL,
@@ -858,7 +871,7 @@ describe("V1Migration database workflow", () => {
     yield* db.run(sql`
       CREATE TABLE message (
         id text PRIMARY KEY,
-        session_id text NOT NULL,
+        session_id text NOT NULL REFERENCES session(id) ON DELETE CASCADE,
         time_created integer NOT NULL,
         time_updated integer NOT NULL,
         data text NOT NULL
@@ -867,13 +880,16 @@ describe("V1Migration database workflow", () => {
     yield* db.run(sql`
       CREATE TABLE part (
         id text PRIMARY KEY,
-        message_id text NOT NULL,
+        message_id text NOT NULL REFERENCES message(id) ON DELETE CASCADE,
         session_id text NOT NULL,
         time_created integer NOT NULL,
         time_updated integer NOT NULL,
         data text NOT NULL
       )
     `)
+    yield* db.run(sql`CREATE INDEX message_session_time_created_id_idx ON message(session_id, time_created, id)`)
+    yield* db.run(sql`CREATE INDEX part_message_id_id_idx ON part(message_id, id)`)
+    yield* db.run(sql`CREATE INDEX part_session_idx ON part(session_id)`)
   })
 
   const database = <A, E>(effect: Effect.Effect<A, E, Database.Service | Global.Service | Scope.Scope>) =>
@@ -886,6 +902,436 @@ describe("V1Migration database workflow", () => {
       }),
     )
 
+  const seedSession = Effect.fnUntraced(function* (id = "ses_test") {
+    const service = yield* Database.Service
+    yield* service.db.run(
+      sql`INSERT OR IGNORE INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('global', '/tmp/test', 1, 2, '[]')`,
+    )
+    yield* service.db.run(
+      sql`INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (${id}, 'global', ${id}, '/tmp/test', 'Test', '1', 1, 2)`,
+    )
+  })
+
+  const seedHistory = Effect.fnUntraced(function* (
+    messages: V1Migration.SourceMessage[],
+    parts: V1Migration.SourcePart[],
+  ) {
+    const service = yield* Database.Service
+    for (const message of messages)
+      yield* service.db.run(
+        sql`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (${message.id}, ${message.session_id}, ${message.time_created}, ${message.time_updated}, ${message.data})`,
+      )
+    for (const part of parts)
+      yield* service.db.run(
+        sql`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (${part.id}, ${part.message_id}, ${part.session_id}, ${part.time_created}, ${part.time_updated}, ${part.data})`,
+      )
+  })
+
+  const sourceDatabase = <A, E>(filename: string, effect: Effect.Effect<A, E, Database.Service>) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(
+          sql`CREATE TABLE IF NOT EXISTS project (id text PRIMARY KEY, worktree text NOT NULL, name text, time_created integer NOT NULL, time_updated integer NOT NULL, sandboxes text NOT NULL)`,
+        )
+        const legacy = yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session'`)
+        if (!legacy) yield* createLegacyTables(db)
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        return yield* effect.pipe(Effect.provideService(Database.Service, { db }))
+      }).pipe(Effect.provide(SqliteClient.layer({ filename, disableWAL: true }))),
+    )
+
+  test("stages successive read-only V1 snapshots without replacing V2 or propagating V1 deletions", async () => {
+    await using tmp = await tmpdir()
+    const filename = path.join(tmp.path, "v1-snapshot.db")
+    await database(
+      Effect.gen(function* () {
+        const service = yield* Database.Service
+        const db = service.db
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* sourceDatabase(
+          filename,
+          Effect.gen(function* () {
+            yield* seedSession()
+            yield* seedSession("ses_keep")
+            yield* seedHistory(
+              [user("msg_source")],
+              [part("prt_source", "msg_source", { type: "text", text: "source initial" })],
+            )
+          }),
+        )
+        const sourceBefore = yield* Effect.promise(() => Bun.file(filename).bytes())
+        expect(yield* V1Migration.stageSource({ sourceDatabasePath: filename })).toEqual({
+          sessions: 2,
+          messages: 1,
+          parts: 1,
+        })
+        expect(yield* Effect.promise(() => Bun.file(filename).bytes())).toEqual(sourceBefore)
+        yield* V1Migration.run({ refresh: true, nextDatabasePath: false })
+        yield* db.run(sql`UPDATE project SET name = 'V2 project' WHERE id = 'global'`)
+        yield* db.run(sql`UPDATE session_v2 SET title = 'V2 title' WHERE id = 'ses_test'`)
+        yield* db.run(
+          sql`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES ('msg_native', 'ses_test', 'user', 10, 30, 30, '{"text":"native","time":{"created":30}}')`,
+        )
+        yield* db.run(
+          sql`UPDATE event_sequence SET seq = 12, owner_id = 'native-owner' WHERE aggregate_id = 'ses_test'`,
+        )
+        yield* db.run(
+          sql`INSERT INTO event (id, aggregate_id, seq, created, type, data) VALUES ('evt_native', 'ses_test', 12, 30, 'session.renamed.1', '{}')`,
+        )
+        const events = yield* db.all(sql`SELECT * FROM event`)
+        const native = yield* db.get(sql`SELECT * FROM session_message WHERE id = 'msg_native'`)
+        yield* sourceDatabase(
+          filename,
+          Effect.gen(function* () {
+            const source = yield* Database.Service
+            yield* source.db.run(
+              sql`UPDATE part SET data = '{"type":"text","text":"source updated"}' WHERE id = 'prt_source'`,
+            )
+            yield* source.db.run(sql`UPDATE session SET title = 'V1 title' WHERE id = 'ses_test'`)
+            yield* seedHistory(
+              [user("msg_new_source", {}, 40)],
+              [part("prt_new_source", "msg_new_source", { type: "text", text: "new source prompt" })],
+            )
+            yield* seedSession("ses_new_source")
+            yield* source.db.run(sql`DELETE FROM session WHERE id = 'ses_keep'`)
+          }),
+        )
+        const updatedSource = yield* Effect.promise(() => Bun.file(filename).bytes())
+        expect(yield* V1Migration.stageSource({ sourceDatabasePath: filename })).toEqual({
+          sessions: 2,
+          messages: 2,
+          parts: 2,
+        })
+        yield* V1Migration.run({ refresh: true, nextDatabasePath: false })
+        expect(yield* db.get(sql`SELECT title FROM session_v2 WHERE id = 'ses_test'`)).toEqual({ title: "V2 title" })
+        expect(yield* db.get(sql`SELECT name FROM project WHERE id = 'global'`)).toEqual({ name: "V2 project" })
+        expect(yield* db.get(sql`SELECT id FROM session WHERE id = 'ses_keep'`)).toEqual({ id: "ses_keep" })
+        expect(yield* db.get(sql`SELECT id FROM session_v2 WHERE id = 'ses_keep'`)).toEqual({ id: "ses_keep" })
+        expect(yield* db.get(sql`SELECT id FROM session_v2 WHERE id = 'ses_new_source'`)).toEqual({
+          id: "ses_new_source",
+        })
+        expect(yield* db.get(sql`SELECT * FROM session_message WHERE id = 'msg_native'`)).toEqual(native)
+        expect(yield* db.all(sql`SELECT * FROM event`)).toEqual(events)
+        expect(yield* db.get(sql`SELECT seq, owner_id FROM event_sequence WHERE aggregate_id = 'ses_test'`)).toEqual({
+          seq: 13,
+          owner_id: "native-owner",
+        })
+        expect(
+          yield* db.get<{ data: string }>(sql`SELECT data FROM session_message WHERE id = 'msg_source'`),
+        ).toMatchObject({ data: expect.stringContaining("source updated") })
+        const history = yield* db.all(sql`SELECT * FROM session_message ORDER BY id`)
+        yield* V1Migration.stageSource({ sourceDatabasePath: filename })
+        yield* V1Migration.run({ refresh: true, nextDatabasePath: false })
+        expect(yield* db.all(sql`SELECT * FROM session_message ORDER BY id`)).toEqual(history)
+        expect(yield* Effect.promise(() => Bun.file(filename).bytes())).toEqual(updatedSource)
+        // A snapshot no longer containing a message or part cannot erase retained source history.
+        yield* sourceDatabase(
+          filename,
+          Effect.gen(function* () {
+            const source = yield* Database.Service
+            yield* source.db.run(sql`DELETE FROM part WHERE id = 'prt_source'`)
+            yield* source.db.run(sql`DELETE FROM message WHERE id = 'msg_source'`)
+          }),
+        )
+        yield* V1Migration.stageSource({ sourceDatabasePath: filename })
+        expect(yield* db.get(sql`SELECT id FROM message WHERE id = 'msg_source'`)).toEqual({ id: "msg_source" })
+        expect(yield* db.get(sql`SELECT id FROM part WHERE id = 'prt_source'`)).toEqual({ id: "prt_source" })
+      }),
+    )
+  })
+
+  test("rejects staging or next-database import from the target itself, including filesystem aliases", async () => {
+    await using tmp = await tmpdir()
+    const filename = path.join(tmp.path, "candidate.db")
+    const alias = path.join(tmp.path, "alias.db")
+    const fs = await import("node:fs/promises")
+    await Effect.runPromise(
+      sourceDatabase(
+        filename,
+        Effect.gen(function* () {
+          yield* seedSession()
+          yield* Effect.promise(() => fs.symlink(filename, alias))
+          for (const sourceDatabasePath of [filename, alias]) {
+            const staged = yield* Effect.exit(V1Migration.stageSource({ sourceDatabasePath }))
+            expect(staged._tag).toBe("Failure")
+            expect(String(staged)).toContain("source and target must be different")
+            const imported = yield* Effect.exit(
+              V1Migration.run({ refresh: true, nextDatabasePath: sourceDatabasePath }).pipe(
+                Effect.provideService(Global.Service, Global.make({ data: tmp.path })),
+              ),
+            )
+            expect(imported._tag).toBe("Failure")
+            expect(String(imported)).toContain("source and target must be different")
+          }
+        }),
+      ),
+    )
+  })
+
+  test("stages new sessions and old-session additions around V2 continuations without replacing events or sequences", async () => {
+    await database(
+      Effect.gen(function* () {
+        const service = yield* Database.Service
+        const db = service.db
+        yield* seedSession()
+        yield* seedHistory(
+          [user("msg_first"), assistant("msg_answer", "msg_first", { agent: undefined })],
+          [
+            part("prt_first", "msg_first", { type: "text", text: "before compaction" }),
+            part("prt_answer", "msg_answer", { type: "text", text: "first answer" }),
+          ],
+        )
+        yield* V1Migration.run()
+        yield* db.run(
+          sql`UPDATE session_v2 SET title = 'V2 title', agent = 'review', cost = cost + 7 WHERE id = 'ses_test'`,
+        )
+        yield* db.run(
+          sql`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES ('msg_v2', 'ses_test', 'user', 10, 50, 50, '{"text":"V2 continued","time":{"created":50}}')`,
+        )
+        yield* db.run(sql`UPDATE event_sequence SET seq = 20, owner_id = 'v2-owner' WHERE aggregate_id = 'ses_test'`)
+        yield* db.run(
+          sql`INSERT INTO event (id, aggregate_id, seq, created, type, data) VALUES ('evt_v2', 'ses_test', 20, 50, 'session.renamed.1', '{"title":"V2 title"}')`,
+        )
+        const events = yield* db.all(sql`SELECT * FROM event`)
+        const native = yield* db.get(sql`SELECT * FROM session_message WHERE id = 'msg_v2'`)
+        // Parts can change without their parent message/session timestamp changing.
+        yield* db.run(
+          sql`UPDATE part SET data = '{"type":"text","text":"completed first answer"}' WHERE id = 'prt_answer'`,
+        )
+        yield* seedHistory(
+          [
+            user("msg_compact", {}, 60),
+            assistant("msg_summary", "msg_compact", { summary: true }, 70),
+            user("msg_later", {}, 80),
+          ],
+          [
+            part("prt_compact", "msg_compact", { type: "compaction", auto: true, tail_start_id: "msg_first" }),
+            part("prt_summary", "msg_summary", { type: "text", text: "folded summary" }),
+            part("prt_later", "msg_later", { type: "text", text: "later V1 prompt" }),
+          ],
+        )
+        yield* seedSession("ses_aaa_new") // New descending V1 ID sorts below the completed cursor.
+        expect(yield* V1Migration.status()).toEqual({ status: "required" })
+        yield* V1Migration.run() // Normal startup discovers new sessions without rescanning imported ones.
+        expect(yield* db.get(sql`SELECT id FROM session_v2 WHERE id = 'ses_aaa_new'`)).toEqual({ id: "ses_aaa_new" })
+        yield* V1Migration.run({ refresh: true })
+        expect(yield* db.get(sql`SELECT title, agent, cost FROM session_v2 WHERE id = 'ses_test'`)).toEqual({
+          title: "V2 title",
+          agent: "review",
+          cost: 9,
+        })
+        expect(yield* db.all(sql`SELECT * FROM event`)).toEqual(events)
+        expect(yield* db.get(sql`SELECT * FROM session_message WHERE id = 'msg_v2'`)).toEqual(native)
+        expect(yield* db.get(sql`SELECT seq, owner_id FROM event_sequence WHERE aggregate_id = 'ses_test'`)).toEqual({
+          seq: 22,
+          owner_id: "v2-owner",
+        })
+        expect(
+          yield* db.all(sql`SELECT id, seq FROM session_message WHERE session_id = 'ses_test' ORDER BY seq`),
+        ).toEqual([
+          { id: "msg_first", seq: 0 },
+          { id: "msg_answer", seq: 1 },
+          { id: "msg_v2", seq: 10 },
+          { id: "msg_compact", seq: 21 },
+          { id: "msg_later", seq: 22 },
+        ])
+        const compact = yield* db.get<{ data: string }>(sql`SELECT data FROM session_message WHERE id = 'msg_compact'`)
+        expect(JSON.parse(compact?.data ?? "{}")).toMatchObject({ summary: "folded summary", status: "completed" })
+        expect(
+          yield* db.get<{ data: string }>(sql`SELECT data FROM session_message WHERE id = 'msg_answer'`),
+        ).toMatchObject({ data: expect.stringContaining("completed first answer") })
+        const snapshot = yield* db.all(sql`SELECT * FROM session_message ORDER BY id`)
+        yield* V1Migration.run({ refresh: true })
+        expect(yield* db.all(sql`SELECT * FROM session_message ORDER BY id`)).toEqual(snapshot)
+        expect(yield* db.all(sql`SELECT * FROM event`)).toEqual(events)
+        expect(yield* db.get(sql`SELECT cost FROM session_v2 WHERE id = 'ses_test'`)).toEqual({ cost: 9 })
+        expect(yield* db.get(sql`SELECT count(*) AS count FROM message`)).toEqual({ count: 5 })
+        expect(yield* db.get(sql`SELECT count(*) AS count FROM part`)).toEqual({ count: 5 })
+      }),
+    )
+  })
+
+  test("preserves V2-only edits and deletion tombstones on repeated refresh", async () => {
+    await database(
+      Effect.gen(function* () {
+        const service = yield* Database.Service
+        const db = service.db
+        yield* seedSession()
+        yield* seedSession("ses_deleted")
+        yield* seedHistory(
+          [user("msg_edit"), user("msg_delete", {}, 30)],
+          [part("prt_edit", "msg_edit", { type: "text", text: "original" })],
+        )
+        yield* V1Migration.run()
+        yield* db.run(
+          sql`UPDATE session_message SET data = '{"text":"V2 edit","time":{"created":10}}' WHERE id = 'msg_edit'`,
+        )
+        yield* db.run(sql`DELETE FROM session_message WHERE id = 'msg_delete'`)
+        yield* db.run(sql`DELETE FROM session_v2 WHERE id = 'ses_deleted'`)
+        yield* V1Migration.run({ refresh: true })
+        yield* V1Migration.run()
+        expect(
+          yield* db.get<{ data: string }>(sql`SELECT data FROM session_message WHERE id = 'msg_edit'`),
+        ).toMatchObject({ data: expect.stringContaining("V2 edit") })
+        expect(yield* db.get(sql`SELECT id FROM session_message WHERE id = 'msg_delete'`)).toBeUndefined()
+        expect(yield* db.get(sql`SELECT id FROM session_v2 WHERE id = 'ses_deleted'`)).toBeUndefined()
+        expect(yield* V1Migration.status()).toEqual({ status: "completed" })
+      }),
+    )
+  })
+
+  test("conflicting dual-writer edits roll back one session and retain both originals for recovery", async () => {
+    await database(
+      Effect.gen(function* () {
+        const service = yield* Database.Service
+        const db = service.db
+        yield* seedSession()
+        yield* seedHistory(
+          [user("msg_conflict")],
+          [part("prt_conflict", "msg_conflict", { type: "text", text: "initial" })],
+        )
+        yield* V1Migration.run()
+        yield* db.run(
+          sql`UPDATE session_message SET data = '{"text":"V2 version","time":{"created":10}}' WHERE id = 'msg_conflict'`,
+        )
+        yield* db.run(sql`UPDATE part SET data = '{"type":"text","text":"V1 version"}' WHERE id = 'prt_conflict'`)
+        const before = yield* db.all(sql`SELECT * FROM session_message`)
+        const receipts = yield* db.all(sql`SELECT * FROM kv WHERE key LIKE 'migration.v1-v2.session.%'`)
+        const result = yield* Effect.exit(V1Migration.run({ refresh: true }))
+        expect(result._tag).toBe("Failure")
+        expect(String(result)).toContain("V1 history conflict: session ses_test, message msg_conflict")
+        expect(yield* db.all(sql`SELECT * FROM session_message`)).toEqual(before)
+        expect(yield* db.all(sql`SELECT * FROM kv WHERE key LIKE 'migration.v1-v2.session.%'`)).toEqual(receipts)
+        expect(yield* db.get<{ data: string }>(sql`SELECT data FROM part WHERE id = 'prt_conflict'`)).toMatchObject({
+          data: expect.stringContaining("V1 version"),
+        })
+        // Resolve explicitly to the V1 baseline on the disposable candidate, then retry.
+        yield* db.run(
+          sql`UPDATE session_message SET data = '{"text":"initial","time":{"created":10}}' WHERE id = 'msg_conflict'`,
+        )
+        yield* V1Migration.run({ refresh: true })
+        expect(
+          yield* db.get<{ data: string }>(sql`SELECT data FROM session_message WHERE id = 'msg_conflict'`),
+        ).toMatchObject({ data: expect.stringContaining("V1 version") })
+      }),
+    )
+  })
+
+  test("adopts an old completed marker and repairs previously skipped historical assistants without wiping V2", async () => {
+    await database(
+      Effect.gen(function* () {
+        const service = yield* Database.Service
+        const db = service.db
+        yield* seedSession()
+        yield* seedHistory(
+          [user("msg_old_prompt"), assistant("msg_old_answer", "msg_old_prompt", { agent: undefined })],
+          [
+            part("prt_old_prompt", "msg_old_prompt", { type: "text", text: "old question" }),
+            part("prt_old_answer", "msg_old_answer", { type: "text", text: "previously skipped answer" }),
+          ],
+        )
+        yield* V1Migration.run()
+        // This is the old importer's completed-marker state: no provenance receipts,
+        // an assistant dropped by strict decoding, and a subsequent V2 continuation.
+        yield* db.run(sql`DELETE FROM kv WHERE key LIKE 'migration.v1-v2.session.%'`)
+        yield* db.run(sql`DELETE FROM session_message WHERE id = 'msg_old_answer'`)
+        yield* db.run(
+          sql`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES ('msg_old_v2', 'ses_test', 'user', 9, 50, 50, '{"text":"continued","time":{"created":50}}')`,
+        )
+        yield* db.run(
+          sql`UPDATE event_sequence SET seq = 12, owner_id = 'old-v2-owner' WHERE aggregate_id = 'ses_test'`,
+        )
+        expect(yield* V1Migration.status()).toEqual({ status: "required" })
+        yield* V1Migration.run({ refresh: true })
+        expect(yield* db.all(sql`SELECT id, seq FROM session_message ORDER BY seq`)).toEqual([
+          { id: "msg_old_prompt", seq: 0 },
+          { id: "msg_old_v2", seq: 9 },
+          { id: "msg_old_answer", seq: 13 },
+        ])
+        expect(yield* db.get(sql`SELECT seq, owner_id FROM event_sequence WHERE aggregate_id = 'ses_test'`)).toEqual({
+          seq: 13,
+          owner_id: "old-v2-owner",
+        })
+        const snapshot = yield* db.all(sql`SELECT * FROM session_message ORDER BY seq`)
+        yield* V1Migration.run({ refresh: true })
+        expect(yield* db.all(sql`SELECT * FROM session_message ORDER BY seq`)).toEqual(snapshot)
+      }),
+    )
+  })
+
+  test("resumes an interrupted refresh without duplicating the sessions already committed", async () => {
+    await database(
+      Effect.gen(function* () {
+        const service = yield* Database.Service
+        const db = service.db
+        yield* seedSession("ses_c")
+        yield* seedSession("ses_b")
+        yield* V1Migration.run()
+        yield* seedHistory(
+          [
+            { ...user("msg_resume_c"), session_id: "ses_c" },
+            { ...user("msg_resume_b"), session_id: "ses_b" },
+          ],
+          [],
+        )
+        yield* db.run(
+          sql`CREATE TRIGGER stop_refresh BEFORE INSERT ON session_message WHEN NEW.session_id = 'ses_b' BEGIN SELECT RAISE(ABORT, 'interrupted refresh'); END`,
+        )
+        expect((yield* Effect.exit(V1Migration.run({ refresh: true })))._tag).toBe("Failure")
+        expect(yield* db.all(sql`SELECT id, seq FROM session_message`)).toEqual([{ id: "msg_resume_c", seq: 0 }])
+        expect(yield* db.get(sql`SELECT value FROM kv WHERE key = 'migration.v1-v2'`)).toEqual({
+          value: '{"phase":"sessions","cursor":"ses_c"}',
+        })
+        yield* db.run(sql`DROP TRIGGER stop_refresh`)
+        yield* V1Migration.run({ refresh: true })
+        expect(yield* db.all(sql`SELECT id, seq FROM session_message ORDER BY id`)).toEqual([
+          { id: "msg_resume_b", seq: 0 },
+          { id: "msg_resume_c", seq: 0 },
+        ])
+        expect(yield* V1Migration.status()).toEqual({ status: "completed" })
+      }),
+    )
+  })
+
+  test("does not duplicate the derived legacy-tool notice as the V1 transcript grows", async () => {
+    await database(
+      Effect.gen(function* () {
+        const service = yield* Database.Service
+        const db = service.db
+        yield* seedSession()
+        yield* seedHistory(
+          [user("msg_tool_user"), assistant("msg_tool_answer", "msg_tool_user")],
+          [
+            part("prt_tool", "msg_tool_answer", {
+              type: "tool",
+              callID: "call_tool",
+              tool: "bash",
+              state: {
+                status: "completed",
+                input: {},
+                output: "ok",
+                title: "shell",
+                metadata: {},
+                time: { start: 1, end: 2 },
+              },
+            }),
+          ],
+        )
+        yield* V1Migration.run()
+        yield* seedHistory([user("msg_more", {}, 30)], [])
+        yield* V1Migration.run({ refresh: true })
+        yield* V1Migration.run({ refresh: true })
+        expect(yield* db.get(sql`SELECT count(*) AS count FROM session_message WHERE type = 'system'`)).toEqual({
+          count: 1,
+        })
+        expect(yield* db.get(sql`SELECT count(*) AS count FROM session_message WHERE type = 'user'`)).toEqual({
+          count: 2,
+        })
+      }),
+    )
+  })
+
   test("reports required and completed status and completes an empty database idempotently", async () => {
     await database(
       Effect.gen(function* () {
@@ -897,7 +1343,7 @@ describe("V1Migration database workflow", () => {
     )
   })
 
-  test("yields while clearing stale events in batches", async () => {
+  test("preserves pre-existing events even before the first import", async () => {
     await database(
       Effect.gen(function* () {
         const { db } = yield* Database.Service
@@ -912,16 +1358,9 @@ describe("V1Migration database workflow", () => {
           SELECT printf('event_%04d', value), 'stale', value, 1, 'session.renamed.1', '{}'
           FROM rows
         `)
-        let yielded = false
-        const heartbeat = yield* Effect.yieldNow.pipe(
-          Effect.andThen(Effect.sync(() => (yielded = true))),
-          Effect.forkChild({ startImmediately: true }),
-        )
-
         expect(yield* V1Migration.run()).toEqual({ status: "completed" })
-        expect(yielded).toBe(true)
-        yield* Fiber.join(heartbeat)
-        expect(yield* db.get<{ value: number }>(sql`SELECT COUNT(*) AS value FROM event`)).toEqual({ value: 0 })
+        expect(yield* db.get<{ value: number }>(sql`SELECT COUNT(*) AS value FROM event`)).toEqual({ value: 2500 })
+        expect(yield* db.get(sql`SELECT seq FROM event_sequence WHERE aggregate_id = 'stale'`)).toEqual({ seq: 2500 })
       }),
     )
   })
@@ -1142,7 +1581,7 @@ describe("V1Migration database workflow", () => {
     )
   })
 
-  test("replaces projections containing apostrophes and checkpoints completion", async () => {
+  test("retains existing projections and appends imported apostrophes above the event watermark", async () => {
     await database(
       Effect.gen(function* () {
         const { db } = yield* Database.Service
@@ -1177,9 +1616,17 @@ describe("V1Migration database workflow", () => {
         expect(yield* db.all(sql`SELECT id, type, seq, time_created, time_updated, data FROM session_message`)).toEqual(
           [
             {
-              id: source.id,
+              id: "msg_stale",
               type: "user",
               seq: 0,
+              time_created: 1,
+              time_updated: 1,
+              data: '{"text":"stale","time":{"created":1}}',
+            },
+            {
+              id: source.id,
+              type: "user",
+              seq: 10,
               time_created: 10,
               time_updated: 11,
               data: '{"text":"don\'t stop","time":{"created":10}}',
@@ -1188,8 +1635,8 @@ describe("V1Migration database workflow", () => {
         )
         expect(yield* db.all(sql`SELECT id, data FROM message`)).toEqual([{ id: source.id, data: source.data }])
         expect(yield* db.all(sql`SELECT id, data FROM part`)).toEqual([{ id: "prt_1", data: sourcePart.data }])
-        expect(yield* db.get(sql`SELECT seq FROM event_sequence WHERE aggregate_id = 'ses_test'`)).toEqual({ seq: 0 })
-        expect(yield* db.all(sql`SELECT id FROM event`)).toEqual([])
+        expect(yield* db.get(sql`SELECT seq FROM event_sequence WHERE aggregate_id = 'ses_test'`)).toEqual({ seq: 10 })
+        expect(yield* db.all(sql`SELECT id FROM event`)).toEqual([{ id: "event_stale" }])
         expect(
           yield* db.get(
             sql`SELECT agent, model, metadata, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, revert, time_created, time_updated, time_compacting, time_archived FROM session_v2 WHERE id = 'ses_test'`,
@@ -1274,7 +1721,7 @@ describe("V1Migration database workflow", () => {
           seq: 7,
           owner_id: "owner",
         })
-        expect(yield* db.all(sql`SELECT id FROM event WHERE aggregate_id = 'ses_b'`)).toEqual([])
+        expect(yield* db.all(sql`SELECT id FROM event WHERE aggregate_id = 'ses_b'`)).toEqual([{ id: "event_stale_b" }])
         expect(yield* db.get(sql`SELECT value FROM kv WHERE key = 'migration.v1-v2'`)).toEqual({
           value: '{"phase":"sessions","cursor":"ses_c"}',
         })
@@ -1288,12 +1735,17 @@ describe("V1Migration database workflow", () => {
           Effect.retry(Schedule.spaced("10 millis")),
         )
         expect(yield* db.get(sql`SELECT cost FROM session_v2 WHERE id = 'ses_b'`)).toEqual({ cost: 0 })
-        expect(yield* db.all(sql`SELECT id FROM session_message WHERE session_id = 'ses_b'`)).toEqual([])
+        expect(yield* db.all(sql`SELECT id FROM session_message WHERE session_id = 'ses_b'`)).toEqual([
+          { id: "msg_stale_b" },
+        ])
         expect(yield* db.get(sql`SELECT seq, owner_id FROM event_sequence WHERE aggregate_id = 'ses_b'`)).toEqual({
-          seq: -1,
-          owner_id: null,
+          seq: 7,
+          owner_id: "owner",
         })
-        expect(yield* db.all(sql`SELECT id FROM event`)).toEqual([{ id: "event_after_clear" }])
+        expect(yield* db.all(sql`SELECT id FROM event ORDER BY id`)).toEqual([
+          { id: "event_after_clear" },
+          { id: "event_stale_b" },
+        ])
       }),
     )
   })

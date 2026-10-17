@@ -10,10 +10,11 @@ import { KVTable } from "../kv/sql.js"
 import { EventSequenceTable } from "../event/sql.js"
 import { eq, sql } from "drizzle-orm"
 import { Global } from "@opencode/util/global"
-import { existsSync } from "node:fs"
+import { existsSync, statSync } from "node:fs"
 import path from "node:path"
 import type { Database as SQLiteDatabase } from "bun:sqlite"
 import { Project } from "@opencode/schema/project"
+import { createHash } from "node:crypto"
 
 export type SourceMessage = {
   readonly id: string
@@ -88,8 +89,10 @@ type RunResult = {
   readonly status: "completed"
 }
 
-type Options = {
-  readonly nextDatabasePath?: string
+export type Options = {
+  readonly nextDatabasePath?: string | false
+  /** Rescan histories of previously imported sessions, while retaining V2 changes. Run with execution stopped. */
+  readonly refresh?: boolean
 }
 
 type MigrationState = { readonly phase: "sessions"; readonly cursor?: string } | { readonly phase: "completed" }
@@ -213,7 +216,12 @@ type NextMessage = {
 
 const lock = Semaphore.makeUnsafe(1)
 const MIGRATION_STATE_KEY = "migration.v1-v2"
-const EVENT_DELETE_BATCH_SIZE = 1_000
+const RECEIPT_PREFIX = "migration.v1-v2.session."
+const Receipt = Schema.Struct({
+  messages: Schema.Record(Schema.String, Schema.String),
+  totals: Schema.Tuple([Schema.Number, Schema.Number, Schema.Number, Schema.Number, Schema.Number, Schema.Number]),
+})
+const decodeReceipt = Schema.decodeUnknownSync(Receipt)
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
 const decodeMessage = Schema.decodeUnknownOption(SessionV1.Info)
 const decodePart = Schema.decodeUnknownOption(SessionV1.Part)
@@ -226,7 +234,17 @@ export function transformSession(input: TransformInput): TransformResult {
       const value = Option.getOrUndefined(decodeJson(row.data))
       const decoded =
         value && typeof value === "object"
-          ? Option.getOrUndefined(decodeMessage({ ...value, id: row.id, sessionID: row.session_id }))
+          ? Option.getOrUndefined(
+              decodeMessage({
+                ...value,
+                // Early V1 assistants recorded mode but did not yet record agent.
+                ...("role" in value && value.role === "assistant" && !("agent" in value)
+                  ? { agent: "mode" in value && typeof value.mode === "string" ? value.mode : "build" }
+                  : {}),
+                id: row.id,
+                sessionID: row.session_id,
+              }),
+            )
           : undefined
       if (decoded) return { row, value: decoded }
       warnings.push({ reason: "invalid-message", sessionID: input.session.id, messageID: row.id })
@@ -497,14 +515,14 @@ export function status(): Effect.Effect<Status, never, Database.Service> {
     const state = yield* readState(db)
     if (runtimeState.status === "running") return runtimeState
     if (runtimeState.status === "error") return runtimeState
-    if (state?.phase === "completed") return { status: "completed" as const }
+    if (state?.phase === "completed" && !(yield* pendingSessions(db))) return { status: "completed" as const }
     return { status: "required" as const }
   })
 }
 
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    runtimeState = { status: "running", progress: { label: "Clearing old events" } }
+    runtimeState = { status: "running", progress: { label: "Checking legacy histories" } }
     yield* run().pipe(
       Effect.matchCauseEffect({
         onFailure: (cause) =>
@@ -531,47 +549,136 @@ function updateProgress(progress: Progress) {
   if (runtimeState.status === "running") runtimeState = { status: "running", progress }
 }
 
+/** Copy a retained V1 snapshot into a stopped candidate's legacy tables before run({ refresh: true }). */
+export function stageSource(options: { readonly sourceDatabasePath: string }) {
+  return lock
+    .withPermit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const db = (yield* Database.Service).db
+          yield* requireSeparateSource(db, options.sourceDatabasePath)
+          const source = yield* openSourceDatabase(options.sourceDatabasePath)
+          const tables = ["project", "session", "message", "part"] as const
+          const columns = new Map<string, string[]>()
+          for (const table of tables) {
+            const available = new Set(
+              source
+                .query<{ name: string }, [string]>("SELECT name FROM pragma_table_info(?)")
+                .all(table)
+                .map((row) => row.name),
+            )
+            const target = yield* db.all<{ name: string; required: number; fallback: string | null }>(
+              sql`SELECT name, "notnull" AS required, dflt_value AS fallback FROM pragma_table_info(${table})`,
+            )
+            if (!available.has("id") || target.length === 0)
+              return yield* Effect.die(new Error(`V1 staging requires source and candidate legacy table ${table}`))
+            const missing = target.filter(
+              (column) => column.required && column.fallback === null && !available.has(column.name),
+            )
+            if (missing.length)
+              return yield* Effect.die(
+                new Error(
+                  `V1 staging ${table} missing required columns: ${missing.map((column) => column.name).join(", ")}`,
+                ),
+              )
+            columns.set(
+              table,
+              target.filter((column) => available.has(column.name)).map((column) => column.name),
+            )
+          }
+          source.run("BEGIN")
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              if (source.inTransaction) source.run("ROLLBACK")
+            }),
+          )
+          const sessions = source
+            .query<{ id: string; project_id: string }, []>("SELECT id, project_id FROM session ORDER BY id DESC")
+            .all()
+          const result = { sessions: 0, messages: 0, parts: 0 }
+          for (const session of sessions) {
+            yield* db
+              .transaction((tx) =>
+                Effect.gen(function* () {
+                  for (const table of tables) {
+                    const names = columns.get(table) ?? []
+                    const quoted = names.map((name) => `"${name.replaceAll('"', '""')}"`).join(", ")
+                    const key = table === "project" || table === "session" ? "id" : "session_id"
+                    const rows = source
+                      .query<Record<string, unknown>, [string]>(`SELECT ${quoted} FROM "${table}" WHERE "${key}" = ?`)
+                      .all(table === "project" ? session.project_id : session.id)
+                    const fields = names.filter((name) => name !== "id")
+                    // Keep V2-owned project metadata. Only the legacy tables accept source updates.
+                    const conflict =
+                      table === "project"
+                        ? sql`DO NOTHING`
+                        : sql`DO UPDATE SET ${sql.join(
+                            fields.map((name) => sql`${sql.identifier(name)} = excluded.${sql.identifier(name)}`),
+                            sql`, `,
+                          )}
+            WHERE ${sql.join(
+              fields.map(
+                (name) => sql`${sql.identifier(table)}.${sql.identifier(name)} IS NOT excluded.${sql.identifier(name)}`,
+              ),
+              sql` OR `,
+            )}`
+                    for (let offset = 0; offset < rows.length; offset += 100)
+                      yield* tx.run(sql`INSERT INTO ${sql.identifier(table)} (${sql.join(
+                        names.map((name) => sql.identifier(name)),
+                        sql`, `,
+                      )})
+              VALUES ${sql.join(
+                rows.slice(offset, offset + 100).map(
+                  (row) =>
+                    sql`(${sql.join(
+                      names.map((name) => sql`${row[name]}`),
+                      sql`, `,
+                    )})`,
+                ),
+                sql`, `,
+              )}
+              ON CONFLICT(id) ${conflict}`)
+                    if (table === "message") result.messages += rows.length
+                    if (table === "part") result.parts += rows.length
+                  }
+                }),
+              )
+              .pipe(Effect.orDie)
+            result.sessions += 1
+            yield* Effect.yieldNow
+          }
+          source.run("COMMIT")
+          return result
+        }),
+      ),
+    )
+    .pipe(Effect.orDie)
+}
+
 export function run(options: Options = {}): Effect.Effect<RunResult, never, Database.Service | Global.Service> {
   return lock.withPermit(
     Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const global = yield* Global.Service
+      yield* requireSeparateSource(db, nextPath(options, global.data))
       const state = yield* readState(db)
-      if (state?.phase === "completed") return { status: "completed" as const }
       if (!(yield* hasLegacySessions(db))) return { status: "completed" as const }
+      if (state?.phase === "completed" && !options.refresh && !(yield* pendingSessions(db)))
+        return { status: "completed" as const }
       const now = Date.now()
       yield* db.run(sql`
           INSERT OR IGNORE INTO project (id, worktree, time_created, time_updated, time_active, sandboxes)
           VALUES (${Project.ID.global}, ${path.parse(global.data).root}, ${now}, ${now}, ${now}, '[]')
         `)
-      if (state === undefined)
-        yield* db
-          .transaction((tx) =>
-            Effect.gen(function* () {
-              while (true) {
-                yield* tx.run(sql`
-                    DELETE FROM event
-                    WHERE rowid IN (SELECT rowid FROM event LIMIT ${EVENT_DELETE_BATCH_SIZE})
-                  `)
-                const deleted = (yield* tx.get<{ value: number }>(sql`SELECT changes() AS value`))?.value ?? 0
-                if (deleted < EVENT_DELETE_BATCH_SIZE) break
-                yield* Effect.yieldNow
-              }
-              yield* tx
-                .insert(KVTable)
-                .values({ key: MIGRATION_STATE_KEY, value: { phase: "sessions" } })
-                .run()
-            }),
-          )
-          .pipe(Effect.orDie)
+      // A migration marker is never permission to delete durable V2 history.
+      yield* db
+        .insert(KVTable)
+        .values({ key: MIGRATION_STATE_KEY, value: { phase: "sessions" } })
+        .onConflictDoUpdate({ target: KVTable.key, set: { value: { phase: "sessions" } } })
+        .run()
       const sourceTotal = yield* countNextSessions(nextPath(options, global.data))
       const legacyTotal = (yield* db.get<{ value: number }>(sql`SELECT COUNT(*) AS value FROM session`))?.value ?? 0
-      const cursor = state?.phase === "sessions" ? state.cursor : undefined
-      const migrated =
-        cursor !== undefined
-          ? ((yield* db.get<{ value: number }>(sql`SELECT COUNT(*) AS value FROM session WHERE id >= ${cursor}`))
-              ?.value ?? 0)
-          : 0
+      const migrated = 0
       const denominator = sourceTotal + legacyTotal
       updateProgress({ label: "Migrating sessions", numerator: migrated, denominator })
       yield* importNextDatabase(db, nextPath(options, global.data), (completed) => {
@@ -602,6 +709,20 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
                 })
                 .run()
               const projectID = projects.has(nextID.project_id) ? nextID.project_id : Project.ID.global
+              const receiptRow = yield* tx
+                .select()
+                .from(KVTable)
+                .where(eq(KVTable.key, RECEIPT_PREFIX + nextID.id))
+                .get()
+              const receipt = receiptRow ? decodeReceipt(receiptRow.value) : undefined
+              if (receipt && !options.refresh) return
+              const existing = yield* tx
+                .select()
+                .from(SessionTable)
+                .where(eq(SessionTable.id, SessionSchema.ID.make(nextID.id)))
+                .get()
+              // Receipts outlive V2 deletion, so a refresh cannot resurrect a deleted session.
+              if (receipt && !existing) return
               if (projectID !== nextID.project_id)
                 yield* Effect.logWarning("Reassigned V1 session with missing project", {
                   sessionID: nextID.id,
@@ -638,33 +759,100 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
               yield* Effect.forEach(transformed.warnings, (warning) =>
                 Effect.logWarning("Skipped V1 migration row", warning),
               )
-              yield* tx.delete(SessionMessageTable).where(eq(SessionMessageTable.session_id, next.id)).run()
-              yield* Effect.forEach(transformed.messages, (message) =>
-                tx
+              const rows = yield* tx
+                .select()
+                .from(SessionMessageTable)
+                .where(eq(SessionMessageTable.session_id, next.id))
+                .all()
+              const byID = new Map<string, (typeof rows)[number]>(rows.map((row) => [row.id, row]))
+              const sequence = yield* tx
+                .select()
+                .from(EventSequenceTable)
+                .where(eq(EventSequenceTable.aggregate_id, next.id))
+                .get()
+              let watermark = rows.reduce((max, row) => Math.max(max, row.seq), sequence?.seq ?? -1)
+              const hashes = { ...receipt?.messages }
+              for (const message of transformed.messages) {
+                const hash = fingerprint(message)
+                const previous = receipt?.messages[message.id]
+                const current = byID.get(message.id)
+                hashes[message.id] = hash
+                if (previous === hash) continue
+                if (current) {
+                  const currentHash = fingerprint(current)
+                  if (currentHash === hash) continue
+                  if (currentHash !== previous)
+                    return yield* Effect.die(
+                      new Error(
+                        `V1 history conflict: session ${next.id}, message ${message.id}; both histories retained, refresh rolled back for this session`,
+                      ),
+                    )
+                  yield* tx
+                    .update(SessionMessageTable)
+                    .set({
+                      type: message.type,
+                      time_updated: message.time_updated,
+                      data: sql`${JSON.stringify(message.data)}`,
+                    })
+                    .where(eq(SessionMessageTable.id, current.id))
+                    .run()
+                  continue
+                }
+                // Missing previously imported messages are deliberate V2 deletions.
+                if (previous !== undefined) continue
+                // The derived tool notice follows the last V1 message, so its generated ID
+                // changes as V1 grows. Do not duplicate an identical notice on refresh.
+                if (
+                  message.type === "system" &&
+                  rows.some((row) => row.type === "system" && "text" in row.data && row.data.text === message.data.text)
+                )
+                  continue
+                watermark += 1
+                yield* tx
                   .insert(SessionMessageTable)
                   .values({
                     id: SessionMessage.ID.make(message.id),
-                    session_id: SessionSchema.ID.make(message.session_id),
+                    session_id: next.id,
                     type: message.type,
-                    seq: message.seq,
+                    seq: watermark,
                     time_created: message.time_created,
                     time_updated: message.time_updated,
                     data: sql`${JSON.stringify(message.data)}`,
                   })
-                  .run(),
-              )
-              yield* tx
-                .update(SessionTable)
-                .set({ ...transformed.session, time_updated: next.time_updated })
-                .where(eq(SessionTable.id, next.id))
-                .run()
+                  .run()
+              }
+              const totals = usage(transformed.session)
+              if (!existing)
+                yield* tx
+                  .update(SessionTable)
+                  .set({ ...transformed.session, time_updated: next.time_updated })
+                  .where(eq(SessionTable.id, next.id))
+                  .run()
+              if (existing && receipt)
+                yield* tx
+                  .update(SessionTable)
+                  .set({
+                    cost: sql`${SessionTable.cost} + ${totals[0] - receipt.totals[0]}`,
+                    tokens_input: sql`${SessionTable.tokens_input} + ${totals[1] - receipt.totals[1]}`,
+                    tokens_output: sql`${SessionTable.tokens_output} + ${totals[2] - receipt.totals[2]}`,
+                    tokens_reasoning: sql`${SessionTable.tokens_reasoning} + ${totals[3] - receipt.totals[3]}`,
+                    tokens_cache_read: sql`${SessionTable.tokens_cache_read} + ${totals[4] - receipt.totals[4]}`,
+                    tokens_cache_write: sql`${SessionTable.tokens_cache_write} + ${totals[5] - receipt.totals[5]}`,
+                  })
+                  .where(eq(SessionTable.id, next.id))
+                  .run()
               yield* tx
                 .insert(EventSequenceTable)
-                .values({ aggregate_id: next.id, seq: transformed.watermark })
+                .values({ aggregate_id: next.id, seq: watermark })
                 .onConflictDoUpdate({
                   target: EventSequenceTable.aggregate_id,
-                  set: { seq: transformed.watermark, owner_id: null },
+                  set: { seq: sql`max(${EventSequenceTable.seq}, ${watermark})` },
                 })
+                .run()
+              yield* tx
+                .insert(KVTable)
+                .values({ key: RECEIPT_PREFIX + next.id, value: { messages: hashes, totals } })
+                .onConflictDoUpdate({ target: KVTable.key, set: { value: { messages: hashes, totals } } })
                 .run()
             }),
           )
@@ -700,12 +888,29 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
 }
 
 function nextPath(options: Options, data: string) {
+  if (options.nextDatabasePath === false) return undefined
   if (options.nextDatabasePath) return options.nextDatabasePath
   if (process.env.OPENCODE_DB === ":memory:") return undefined
   return path.join(data, "opencode-next.db")
 }
 
-function openNextDatabase(sourcePath: string) {
+function requireSeparateSource(db: Database.Interface["db"], sourcePath: string | undefined) {
+  if (!sourcePath || !existsSync(sourcePath)) return Effect.void
+  return Effect.gen(function* () {
+    const source = statSync(sourcePath)
+    const databases = yield* db.all<{ file: string }>(sql`PRAGMA database_list`)
+    if (
+      databases.some(({ file }) => {
+        if (!file || !existsSync(file)) return false
+        const target = statSync(file)
+        return target.dev === source.dev && target.ino === source.ino
+      })
+    )
+      return yield* Effect.die(new Error("Migration source and target must be different database files"))
+  })
+}
+
+function openSourceDatabase(sourcePath: string) {
   return Effect.acquireRelease(
     Effect.gen(function* () {
       const sqlite = yield* Effect.promise(() => import("bun:sqlite"))
@@ -719,7 +924,7 @@ function countNextSessions(sourcePath: string | undefined) {
   if (!sourcePath || !existsSync(sourcePath)) return Effect.succeed(0)
   return Effect.scoped(
     Effect.gen(function* () {
-      const source = yield* openNextDatabase(sourcePath)
+      const source = yield* openSourceDatabase(sourcePath)
       if (!isNextDatabase(source)) return 0
       return source.query<{ value: number }, []>("SELECT COUNT(*) AS value FROM session").get()?.value ?? 0
     }),
@@ -734,7 +939,7 @@ function importNextDatabase(
   if (!sourcePath || !existsSync(sourcePath)) return Effect.void
   return Effect.scoped(
     Effect.gen(function* () {
-      const source = yield* openNextDatabase(sourcePath)
+      const source = yield* openSourceDatabase(sourcePath)
       if (!isNextDatabase(source)) {
         yield* Effect.logWarning("Skipped incompatible opencode-next.db", { path: sourcePath })
         return
@@ -822,7 +1027,7 @@ function importNextDatabase(
                 .values({ aggregate_id: session.id, seq: messages.at(-1)?.seq ?? -1 })
                 .onConflictDoUpdate({
                   target: EventSequenceTable.aggregate_id,
-                  set: { seq: messages.at(-1)?.seq ?? -1, owner_id: null },
+                  set: { seq: sql`max(${EventSequenceTable.seq}, ${messages.at(-1)?.seq ?? -1})` },
                 })
                 .run()
             }),
@@ -1117,6 +1322,44 @@ function readState(db: Database.Interface["db"]): Effect.Effect<MigrationState |
       Effect.map((row) => parseState(row?.value)),
       Effect.orDie,
     )
+}
+
+function pendingSessions(db: Database.Interface["db"]) {
+  return db
+    .get(
+      sql`
+    SELECT id FROM session WHERE NOT EXISTS (
+      SELECT 1 FROM kv WHERE key = ${RECEIPT_PREFIX} || session.id
+    ) LIMIT 1
+  `,
+    )
+    .pipe(
+      Effect.map((row) => row !== undefined),
+      Effect.orDie,
+    )
+}
+
+function fingerprint(message: { readonly type: string; readonly data: unknown }) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([message.type, message.data], (_key, value: unknown) =>
+        value && typeof value === "object" && !Array.isArray(value)
+          ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+          : value,
+      ),
+    )
+    .digest("hex")
+}
+
+function usage(session: TransformResult["session"]) {
+  return [
+    session.cost ?? 0,
+    session.tokens_input ?? 0,
+    session.tokens_output ?? 0,
+    session.tokens_reasoning ?? 0,
+    session.tokens_cache_read ?? 0,
+    session.tokens_cache_write ?? 0,
+  ] as const
 }
 
 function parseState(input: unknown): MigrationState | undefined {
