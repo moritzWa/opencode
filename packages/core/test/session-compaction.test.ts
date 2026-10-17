@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test"
-import { GenerationOptions, LLMClient, LLMEvent, LanguageModel, ToolDefinition, type LLMRequest } from "@opencode/ai"
+import {
+  AIError,
+  AuthenticationError,
+  GenerationOptions,
+  LLMClient,
+  LLMEvent,
+  LanguageModel,
+  ToolDefinition,
+  type LLMRequest,
+} from "@opencode/ai"
 import { OpenAIChat } from "@opencode/ai/protocols"
 import { Database } from "@opencode/core/database/database"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
@@ -26,6 +35,7 @@ import { Agent } from "@opencode/core/agent"
 import { Provider } from "@opencode/core/provider"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Money } from "@opencode/schema/money"
+import { Model } from "@opencode/schema/model"
 import { Skill } from "@opencode/schema/skill"
 import { Shell } from "@opencode/schema/shell"
 import { DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
@@ -51,6 +61,8 @@ const cost = [
 const client = Layer.mock(LLMClient.Service)({
   stream: (request: LLMRequest) => {
     requests.push(request)
+    if (request.model.id === "unavailable-summarizer")
+      return Stream.fail(new AIError({ reason: new AuthenticationError({ message: "Pinned summarizer unavailable" }) }))
     return Stream.make(
       LLMEvent.textDelta({ id: "summary", text: "## Objective\n- manual summary" }),
       LLMEvent.stepFinish({
@@ -80,6 +92,7 @@ const resolved = SessionRunnerModel.resolved(model, {
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
+      Agent.node,
       Database.node,
       Bus.node,
       SessionProjector.node,
@@ -92,6 +105,21 @@ const it = testEffect(
       Bus.node.replace(Bus.configured({ persist: true })),
       llmClient.replace(client),
       Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
+      SessionRunnerModel.node.replace(
+        Layer.succeed(SessionRunnerModel.Service, {
+          resolve: () =>
+            Effect.succeed(
+              SessionRunnerModel.resolved(
+                LanguageModel.make({
+                  id: "unavailable-summarizer",
+                  provider: "test",
+                  route: OpenAIChat.route,
+                }),
+                { capabilities: resolved.capabilities, cost: [], limit: resolved.limit },
+              ),
+            ),
+        }),
+      ),
     ],
   ),
 )
@@ -332,6 +360,34 @@ const loaded = (session: Session.Info, messages: readonly SessionMessage.Info[])
   initial: "Session instructions",
   tools: { definitions: [], execute: () => Effect.die("Compaction must not execute tools") },
 })
+
+it.effect("falls back from a pinned compaction model without leaving an orphan compaction", () =>
+  Effect.gen(function* () {
+    requests = []
+    const agents = yield* Agent.Service
+    yield* agents.transform((editor) =>
+      editor.update(Agent.ID.make("compaction"), (agent) => {
+        agent.model = { id: Model.ID.make("unavailable-summarizer"), providerID: Provider.ID.make("test") }
+      }),
+    )
+    const session = yield* insertSession(Session.ID.make("ses_compaction_fallback"))
+    const compaction = yield* SessionCompaction.Service
+    const store = yield* SessionStore.Service
+    const user = SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Summarize my work",
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    expect(yield* compaction.compact({ reason: "overflow", context: loaded(session, [user]) })).toEqual({
+      status: "completed",
+    })
+    expect(requests.map((request) => String(request.model.id))).toEqual(["unavailable-summarizer", "summary-model"])
+    const messages = yield* store.context(session.id)
+    expect(messages.filter((message) => message.type === "compaction")).toHaveLength(1)
+    expect(messages.at(-1)).toMatchObject({ type: "compaction", status: "completed", model: resolved.ref })
+  }),
+)
 
 /** Opens the compaction's message as the runner does when it delivers `/compact`, then compacts. */
 const compactManually = (

@@ -98,6 +98,27 @@ function waitForRequest(input: Partial<Permission.AssertInput> = {}) {
 }
 
 describe("Permission", () => {
+  it.effect("withdraws an interrupted permission from clients and rejects late replies", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const bus = yield* Bus.Service
+      const replies: unknown[] = []
+      const unsubscribe = yield* bus.listen((event) =>
+        Effect.sync(() => {
+          if (event.type === Permission.Event.Replied.type) replies.push(event.data)
+        }),
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const { service, fiber, request } = yield* waitForRequest()
+      yield* Fiber.interrupt(fiber)
+      expect(yield* service.list()).toEqual([])
+      expect(replies).toEqual([{ sessionID: request.sessionID, requestID: request.id, reply: "reject" }])
+      const late = yield* service.reply({ requestID: request.id, reply: "once" }).pipe(Effect.flip)
+      expect(late).toBeInstanceOf(Permission.NotFoundError)
+      expect(replies).toHaveLength(1)
+    }),
+  )
+
   it.effect("returns the evaluated effect and only queues prompts", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "read", resource: "*", effect: "allow" }])

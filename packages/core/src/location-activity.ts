@@ -1,12 +1,15 @@
 export * as LocationActivity from "./location-activity.js"
 
-import { Clock, Context, Duration, Effect, Layer, RcMap, Schema } from "effect"
+import { Clock, Context, Duration, Effect, Layer, Option, RcMap, Schema } from "effect"
 import { Bus } from "./bus.js"
 import { Location } from "./location.js"
 import { LocationServiceMap } from "./location-service-map.js"
 import { SessionEvent } from "./session/event.js"
 import { SessionExecution } from "./session/execution.js"
 import { SessionStore } from "./session/store.js"
+import { Job } from "./job.js"
+import { Pty } from "./pty.js"
+import { Shell } from "./shell.js"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
 
 const isSessionEvent = Schema.is(SessionEvent.Durable)
@@ -22,6 +25,7 @@ export function layer(options: { readonly timeToLive?: Duration.Input; readonly 
       const locations = yield* LocationServiceMap.Service
       const execution = yield* SessionExecution.Service
       const sessions = yield* SessionStore.Service
+      const jobs = yield* Job.Service
       const timeToLive = Duration.toMillis(options.timeToLive ?? "60 minutes")
       const entries = new Map<string, { readonly ref: Location.Ref; expiresAt: number }>()
       const key = (ref: Location.Ref) => `${LocationServiceMap.canonical(ref).directory}\0${ref.workspaceID ?? ""}`
@@ -51,6 +55,10 @@ export function layer(options: { readonly timeToLive?: Duration.Input; readonly 
         const expired = Array.from(entries.values()).filter((entry) => entry.expiresAt <= now)
         if (expired.length === 0) return
         const active = yield* Effect.forEach(yield* execution.active, (sessionID) => sessions.get(sessionID))
+        const background = yield* Effect.forEach(
+          (yield* jobs.pendingBackground).filter((job) => job.status === "running"),
+          (job) => sessions.get(job.recovery.kind === "shell" ? job.recovery.sessionID : job.recovery.childSessionID),
+        )
         yield* Effect.forEach(
           expired,
           (entry) =>
@@ -58,18 +66,26 @@ export function layer(options: { readonly timeToLive?: Duration.Input; readonly 
               const owners = active.flatMap((session) =>
                 session && key(session.location) === key(entry.ref) ? [session] : [],
               )
-              // Invalidation only detaches the cache entry; borrowers retain the old
-              // graph. Stop its executions and settle tool cleanup before detaching it.
-              yield* Effect.forEach(
-                owners,
-                (session) => execution.interrupt(session.id, { reason: "inactivity", awaitSettlement: true }),
-                {
-                  discard: true,
-                  concurrency: "unbounded",
-                },
-              )
+              // Silence is not idleness: providers, tools, and human input can all
+              // remain active without publishing durable Session events.
+              if (owners.length > 0) return yield* touch(entry.ref)
+              if (background.some((session) => session && key(session.location) === key(entry.ref)))
+                return yield* touch(entry.ref)
+              const busy = yield* Effect.scoped(
+                Effect.gen(function* () {
+                  const context = yield* locations.contextEffectOption(entry.ref)
+                  if (Option.isNone(context)) return false
+                  const shell = Context.getOption(context.value, Shell.Service)
+                  const pty = Context.getOption(context.value, Pty.Service)
+                  if (Option.isSome(shell) && (yield* shell.value.list()).length > 0) return true
+                  return (
+                    Option.isSome(pty) && (yield* pty.value.list()).some((terminal) => terminal.status === "running")
+                  )
+                }),
+              ).pipe(Effect.orElseSucceed(() => true))
+              if (busy) return yield* touch(entry.ref)
               const remaining = yield* Effect.forEach(yield* execution.active, (sessionID) => sessions.get(sessionID))
-              // New work admitted during cleanup may now own the cached graph.
+              // Work admitted while checking process activity retains the graph too.
               if (remaining.some((session) => session && key(session.location) === key(entry.ref))) {
                 yield* touch(entry.ref)
                 return
@@ -92,5 +108,5 @@ export function layer(options: { readonly timeToLive?: Duration.Input; readonly 
 export const node = makeGlobalNode({
   service: Service,
   layer: layer(),
-  deps: [Bus.node, LocationServiceMap.node, SessionExecution.node, SessionStore.node],
+  deps: [Bus.node, LocationServiceMap.node, SessionExecution.node, SessionStore.node, Job.node],
 })

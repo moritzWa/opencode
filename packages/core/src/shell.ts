@@ -12,6 +12,7 @@ import { FSUtil } from "@opencode/util/fs-util"
 import { Bus } from "./bus.js"
 import { Environment } from "./environment/index.js"
 import { FileRetention } from "./file-retention.js"
+import { FileAccess } from "./file-access.js"
 import { Location } from "./location.js"
 import { Global } from "@opencode/util/global"
 import { ShellSelect } from "./shell/select.js"
@@ -261,8 +262,9 @@ const layer = () =>
             ? undefined
             : ((Schema.is(SessionSchema.ID)(sessionID) ? yield* environments.get(sessionID) : undefined) ?? process.env)
         const invocation: ShellCreateBefore = {
+          ...(Schema.is(SessionSchema.ID)(sessionID) ? { sessionID } : {}),
           command: input.command,
-          cwd: input.cwd ?? location.directory,
+          cwd: FileAccess.resolvePath(location.directory, input.cwd ?? "."),
           timeout: input.timeout ?? 0,
           shell: input.shell ?? (yield* shell.resolve({ priority: "config" })),
           env: {

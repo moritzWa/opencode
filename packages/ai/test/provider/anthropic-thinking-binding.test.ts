@@ -13,6 +13,7 @@ for (const [id, enabled] of [
   ["claude-fable-5-1@default", true],
   ["claude-fable-5-1@20260901", true],
   ["claude-sonnet-6", true],
+  ["claude-sonnet-5-5", true],
   ["claude-opus-5-20260901", false],
   ["claude-opus-4-8", false],
   ["anthropic/claude-opus-4.8", false],
@@ -29,7 +30,11 @@ for (const [id, enabled] of [
       const compiled = yield* compileRequest(request)
       const prepared = yield* AnthropicMessages.route.prepareTransport(compiled.body, request)
       expect(compiled.body.thinking).toEqual(
-        enabled ? { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } } : undefined,
+        enabled
+          ? { type: "adaptive", display: "summarized", block_binding: { prefix_mismatch_behavior: "drop_block" } }
+          : id === "claude-fable-5@default"
+            ? { type: "adaptive", display: "summarized" }
+            : undefined,
       )
       expect(prepared.request.headers["anthropic-beta"]).toBe(
         enabled
@@ -45,7 +50,7 @@ it.effect("preserves explicit thinking settings and combines required beta heade
     for (const thinking of [
       { type: "disabled" },
       { type: "between_tools" },
-      { type: "adaptive", block_binding: { prefix_mismatch_behavior: "error" } },
+      { type: "adaptive", display: "omitted", block_binding: { prefix_mismatch_behavior: "error" } },
     ] as const) {
       const request = LLM.request({
         model: AnthropicMessages.route.model({ id: "claude-fable-5-1" }),

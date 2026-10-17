@@ -251,6 +251,18 @@ const layer = Layer.effect(
               // WITH feedback (CorrectedError) intentionally stays typed so the leaf can turn
               // it into ToolFailure and the model continues.
               Effect.catchTag("Permission.DeclinedError", (error) => Effect.die(error)),
+              Effect.onInterrupt(() =>
+                Effect.suspend(() => {
+                  if (!pending.delete(item.request.id)) return Effect.void
+                  return bus
+                    .publish(Permission.Event.Replied, {
+                      sessionID: item.request.sessionID,
+                      requestID: item.request.id,
+                      reply: "reject",
+                    })
+                    .pipe(Effect.asVoid)
+                }),
+              ),
               Effect.ensuring(
                 Effect.sync(() => {
                   pending.delete(item.request.id)

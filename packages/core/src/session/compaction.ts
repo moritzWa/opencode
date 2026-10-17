@@ -201,6 +201,7 @@ export const layer = Layer.effect(
         },
       }),
     })
+    const started = new Set<SessionContext.Loaded["session"]["id"]>()
 
     const compact = Effect.fn("SessionCompaction.compact")(function* (trigger: Trigger): Effect.fn.Return<Outcome> {
       const settings = state.get()
@@ -218,23 +219,34 @@ export const layer = Layer.effect(
             .resolve({ ...context.session, model: agent.model }, catalog.available)
             .pipe(Effect.orElseSucceed(() => undefined)))) ??
         context.model
-      const ceiling = calculateCeiling(model.limit, settings.buffer)
-      // An unknown window never triggers auto compaction, but the compaction request still needs a size to aim for.
-      const cap = Number.isFinite(ceiling)
-        ? ceiling
-        : calculateCeiling({ ...model.limit, context: UNKNOWN_WINDOW }, settings.buffer)
-      // The provider just rejected this context, so the estimate ran low; the first attempt already aims below it.
-      const budget =
-        trigger.reason === "overflow" ? Math.min(cap, Math.floor(estimateContext(context) * SHRINK_STEPS[0])) : cap
-
       const selected = model === context.model ? trigger : { ...trigger, context: { ...context, model } }
-      const compaction = native
-        ? compactNatively(selected, budget, settings.keep)
-        : summarize(selected, budget, settings.keep)
-      return yield* compaction.pipe(
+      const run = (target: Trigger) => {
+        const ceiling = calculateCeiling(target.context.model.limit, settings.buffer)
+        // An unknown window still needs a bounded summary request.
+        const cap = Number.isFinite(ceiling)
+          ? ceiling
+          : calculateCeiling({ ...target.context.model.limit, context: UNKNOWN_WINDOW }, settings.buffer)
+        const budget =
+          target.reason === "overflow"
+            ? Math.min(cap, Math.floor(estimateContext(target.context) * SHRINK_STEPS[0]))
+            : cap
+        return native ? compactNatively(target, budget, settings.keep) : summarize(target, budget, settings.keep)
+      }
+      return yield* run(selected).pipe(
         Effect.matchEffect({
           onSuccess: (result) => publish(selected, result),
-          onFailure: (failure) => publish(selected, failure),
+          onFailure: (failure) => {
+            if (selected === trigger || native || failure.error.type === "compaction.unavailable")
+              return publish(selected, failure)
+            // A pinned summarizer can be unavailable while the session model still works. Try it
+            // once with its own token budget, without creating another compaction marker.
+            return run(trigger).pipe(
+              Effect.matchEffect({
+                onSuccess: (result) => publish(trigger, result),
+                onFailure: (fallback) => publish(trigger, fallback),
+              }),
+            )
+          },
         }),
       )
     })
@@ -396,7 +408,8 @@ export const layer = Layer.effect(
     ): Effect.fn.Return<Result, Failure> {
       const context = trigger.context
       // The runner opened the manual compaction's message when it delivered the `/compact` item.
-      if (trigger.reason !== "manual") {
+      if (trigger.reason !== "manual" && !started.has(context.session.id)) {
+        started.add(context.session.id)
         yield* bus.publish(SessionEvent.Compaction.Started, { sessionID: context.session.id, reason: "auto", recent })
       }
       if (prepared.event.result) return yield* fromHook(context, prepared.event.result, recent)
@@ -674,7 +687,12 @@ export const layer = Layer.effect(
               ? Effect.void
               : publish(trigger, { error: { type: "compaction.interrupted", message: "Compaction was interrupted" } }),
           ),
-          Effect.ensuring(Effect.sync(() => spent.delete(trigger.context.session.id))),
+          Effect.ensuring(
+            Effect.sync(() => {
+              spent.delete(trigger.context.session.id)
+              started.delete(trigger.context.session.id)
+            }),
+          ),
         ),
     })
   }),

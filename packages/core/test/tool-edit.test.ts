@@ -10,6 +10,7 @@ import { Formatter } from "@opencode/core/formatter"
 import { Location } from "@opencode/core/location"
 import { FileAccess } from "@opencode/core/file-access"
 import { Permission } from "@opencode/core/permission"
+import { PluginHooks } from "@opencode/core/plugin/hooks"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Session } from "@opencode/core/session"
 import { Tool } from "@opencode/core/tool"
@@ -91,23 +92,28 @@ const withTool = <A, E, R>(
     return yield* body(registry)
   }).pipe(
     Effect.provide(
-      AppNodeBuilder.build(LayerNode.group([Tool.node, FileAccess.node, FileMutation.node, editToolNode]), [
-        Environment.node.replace(
-          transformEnvironmentFiles((files) => ({
-            read: (target, range) =>
-              files
-                .read(target, range)
-                .pipe(
-                  Effect.tap(() => Effect.sync(() => fixture.reads++).pipe(Effect.andThen(() => fixture.afterRead()))),
-                ),
-            write: (target, content) =>
-              Effect.sync(() => fixture.writes.push(target)).pipe(Effect.andThen(files.write(target, content))),
-          })),
-        ),
-        Location.node.replace(activeLocation),
-        Formatter.node.replace(fixture.formatter),
-        Permission.node.replace(fixture.permission),
-      ]),
+      AppNodeBuilder.build(
+        LayerNode.group([Tool.node, PluginHooks.node, FileAccess.node, FileMutation.node, editToolNode]),
+        [
+          Environment.node.replace(
+            transformEnvironmentFiles((files) => ({
+              read: (target, range) =>
+                files
+                  .read(target, range)
+                  .pipe(
+                    Effect.tap(() =>
+                      Effect.sync(() => fixture.reads++).pipe(Effect.andThen(() => fixture.afterRead())),
+                    ),
+                  ),
+              write: (target, content) =>
+                Effect.sync(() => fixture.writes.push(target)).pipe(Effect.andThen(files.write(target, content))),
+            })),
+          ),
+          Location.node.replace(activeLocation),
+          Formatter.node.replace(fixture.formatter),
+          Permission.node.replace(fixture.permission),
+        ],
+      ),
     ),
   )
 }
@@ -135,11 +141,28 @@ describe("EditTool", () => {
                   (tool) => tool.name,
                 ),
               ).toEqual(["execute"])
+              const hooks = yield* PluginHooks.Service
+              const events: unknown[] = []
+              yield* hooks.register("tool", "execute.after", (event) =>
+                Effect.sync(() => {
+                  events.push(event)
+                }),
+              )
               const settled = yield* executeTool(
                 registry,
                 call({ path: "hello.txt", oldString: "before", newString: "after" }),
               )
               expect(settled.status).toBe("completed")
+              expect(events).toMatchObject([
+                {
+                  tool: "edit",
+                  sessionID,
+                  cwd: tmp.path,
+                  input: { path: "hello.txt", oldString: "before", newString: "after" },
+                  status: "completed",
+                  result: { output: { replacements: 1 } },
+                },
+              ])
               if (settled.status !== "completed") return
               expect(settled.content).toEqual([
                 {
@@ -642,7 +665,10 @@ describe("EditTool", () => {
       // A CRLF file with a block pasted in from an LF editor, edited with surrounding context.
       const target = path.join(tmp.path, "store.cs")
       return Effect.promise(() =>
-        fs.writeFile(target, "All(item.Sku);\r\n\r\nFind(sku);\r\n\r\nvoid Add()\n{\n  _items[item.Sku] = item;\n}\r\n"),
+        fs.writeFile(
+          target,
+          "All(item.Sku);\r\n\r\nFind(sku);\r\n\r\nvoid Add()\n{\n  _items[item.Sku] = item;\n}\r\n",
+        ),
       ).pipe(
         Effect.andThen(
           withTool(tmp.path, edit, (registry) =>
@@ -686,7 +712,10 @@ describe("EditTool", () => {
           withTool(tmp.path, edit, (registry) =>
             Effect.gen(function* () {
               expect(
-                yield* executeTool(registry, call({ path: "strip.sh", oldString: "\r", newString: "", replaceAll: true })),
+                yield* executeTool(
+                  registry,
+                  call({ path: "strip.sh", oldString: "\r", newString: "", replaceAll: true }),
+                ),
               ).toMatchObject({ status: "completed", output: { replacements: 2 } })
               expect(
                 yield* executeTool(registry, call({ path: "whole.sh", oldString: "x\r\ny\r\n", newString: "x\ny\n" })),
@@ -726,7 +755,10 @@ describe("EditTool", () => {
             Effect.gen(function* () {
               // The typography tier matches the curly quote, and the replacement writes the same bytes back.
               expect(
-                yield* executeTool(registry, call({ path: "quote.txt", oldString: "it's here", newString: "it’s here" })),
+                yield* executeTool(
+                  registry,
+                  call({ path: "quote.txt", oldString: "it's here", newString: "it’s here" }),
+                ),
               ).toEqual({
                 status: "error",
                 error: {

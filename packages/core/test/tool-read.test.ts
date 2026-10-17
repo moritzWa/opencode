@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect } from "bun:test"
 import path from "path"
-import { Effect, Exit, Layer, Result } from "effect"
+import { DateTime, Effect, Exit, Layer, Result } from "effect"
+import { SessionMessage } from "@opencode/core/session/message"
+import { Model } from "@opencode/core/model"
 import { Config } from "@opencode/core/config"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { LayerNode } from "@opencode/util/effect/layer-node"
@@ -36,6 +38,7 @@ const readToolNode = makeLocationNode({
     SessionInstructions.node,
     FSUtil.node,
     Location.node,
+    Session.node,
   ],
 })
 
@@ -47,6 +50,7 @@ const readCalls: {
   page: ReadToolFileSystem.PageInput
 }[] = []
 const listCalls: AbsolutePath[] = []
+let history: SessionMessage.Info[] = []
 let readDefect: unknown
 let directoryEntries: string[] = []
 let directoryEntryDetails: Environment.DirEntry[] = []
@@ -126,6 +130,16 @@ const readLayer = (imageLayer: Layer.Layer<Image.Service>) =>
       FSUtil.node.replace(testFileSystem),
       Location.node.replace(locationLayer),
       Global.node.replace(Global.layerWith({ data: Global.Path.data })),
+      Session.node.replace(
+        Layer.mock(Session.Service, {
+          context: (id) => Effect.succeed(id === sessionID ? history : []),
+          revert: {
+            stage: () => Effect.die("unused Session.revert.stage"),
+            clear: () => Effect.die("unused Session.revert.clear"),
+            commit: () => Effect.die("unused Session.revert.commit"),
+          },
+        }),
+      ),
     ]),
     // Merge by reference so Config.Test and Image.Service resolve to the memoized instances.
     config,
@@ -155,6 +169,7 @@ describe("ReadTool", () => {
     }
     readFailure = undefined
     readOverride = undefined
+    history = []
   })
 
   it.effect("registers, authorizes, and reads through the location filesystem", () =>
@@ -191,6 +206,107 @@ describe("ReadTool", () => {
         },
       ])
       expect(listCalls).toEqual([])
+    }),
+  )
+
+  it.effect("suppresses only an unchanged full output still visible in this session", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const run = (id: string, input = { path: "README.md" }) =>
+        executeTool(registry, {
+          sessionID,
+          ...toolIdentity,
+          call: { type: "tool-call", id, name: "read", input },
+        })
+      const first = yield* run("first")
+      expect(first.metadata?.readHash).toBeString()
+      const content = first.content ?? []
+      if (!content[0]) return expect.unreachable()
+      history = [
+        {
+          id: toolIdentity.messageID,
+          type: "assistant",
+          agent: toolIdentity.agent,
+          model: Model.Ref.parse("test/test"),
+          time: { created: DateTime.fromDateUnsafe(new Date(0)) },
+          content: [
+            {
+              type: "tool",
+              id: "first",
+              name: "read",
+              time: { created: DateTime.fromDateUnsafe(new Date(0)) },
+              state: {
+                status: "completed",
+                input: { path: "README.md" },
+                content: [content[0], ...content.slice(1)],
+                metadata: first.metadata,
+              },
+            },
+          ],
+        },
+      ]
+      const second = yield* run("second")
+      expect(second.content).toEqual([{ type: "text", text: expect.stringContaining("unchanged") }])
+      expect(second.metadata).toEqual({ truncated: false, unchanged: true })
+      expect(assertions).toHaveLength(2)
+      expect(readCalls).toHaveLength(2)
+      const otherSession = yield* executeTool(registry, {
+        sessionID: Session.ID.make("ses_read_other"),
+        ...toolIdentity,
+        call: { type: "tool-call", id: "other-session", name: "read", input: { path: "README.md" } },
+      })
+      expect(otherSession.content).toEqual(first.content)
+
+      const retained = history
+      history = history.map((message) =>
+        message.type !== "assistant"
+          ? message
+          : {
+              ...message,
+              content: message.content.map((part) =>
+                part.type !== "tool" || part.state.status !== "completed"
+                  ? part
+                  : {
+                      ...part,
+                      state: { ...part.state, content: [{ type: "text", text: "[Tool output omitted]" }] },
+                    },
+              ),
+            },
+      )
+      expect((yield* run("pruned-output")).content).toEqual(first.content)
+      history = retained
+
+      readResult = {
+        type: "file",
+        uri: "file:///README.md",
+        name: "README.md",
+        content: "changed",
+        encoding: "utf8",
+        mime: "text/plain",
+      }
+      expect((yield* run("changed")).content).toEqual([
+        { type: "text", text: "Read file README.md, lines 1-1\n1: changed" },
+      ])
+      readResult = new ReadToolFileSystem.TextPage({
+        type: "text-page",
+        content: "hello",
+        mime: "text/plain",
+        offset: 2,
+        truncated: false,
+      })
+      expect((yield* run("other-range")).metadata).not.toHaveProperty("unchanged")
+      readResult = {
+        type: "file",
+        uri: "file:///README.md",
+        name: "README.md",
+        content: "hello",
+        encoding: "utf8",
+        mime: "text/plain",
+      }
+      // Compaction/revert may remove the original even if a later suppression stub survives.
+      history = []
+      expect((yield* run("after-compaction")).content).toEqual(first.content)
+      expect((yield* run("other-file", { path: "other.md" })).metadata).not.toHaveProperty("unchanged")
     }),
   )
 
@@ -830,7 +946,7 @@ describe("ReadTool", () => {
         output: { entries: readResult.entries, truncated: true, next: 4 },
       })
       if (result.status !== "completed") return
-      expect(result.metadata).toEqual({ truncated: true })
+      expect(result.metadata).toMatchObject({ truncated: true })
       expect(result.content).toEqual([
         {
           type: "text",
@@ -921,7 +1037,7 @@ describe("ReadTool", () => {
         output: { type: "text-page", content: "hello", mime: "text/plain", offset: 2, truncated: true, next: 3 },
       })
       if (result.status !== "completed") return
-      expect(result.metadata).toEqual({ truncated: true })
+      expect(result.metadata).toMatchObject({ truncated: true })
       expect(result.content).toEqual([
         {
           type: "text",

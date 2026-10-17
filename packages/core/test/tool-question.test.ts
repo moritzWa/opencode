@@ -4,6 +4,7 @@ import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { Form } from "@opencode/core/form"
 import { Permission } from "@opencode/core/permission"
+import { Location } from "@opencode/core/location"
 import { Session } from "@opencode/core/session"
 import { Tool } from "@opencode/core/tool"
 import { QuestionTool } from "@opencode/core/tool/plugin/question"
@@ -11,6 +12,7 @@ import { Image } from "@opencode/core/image"
 import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { permissionLayer } from "./lib/permission"
+import { tempLocationLayer } from "./fixture/location"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions } from "./lib/tool"
 
@@ -66,6 +68,7 @@ const questionToolNode = makeLocationNode({
 
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([Tool.node, questionToolNode]), [
+    Location.node.replace(tempLocationLayer),
     Permission.node.replace(permission),
     Form.node.replace(form),
     Image.node.replace(imagePassthrough),

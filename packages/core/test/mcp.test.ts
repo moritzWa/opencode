@@ -30,6 +30,7 @@ import { Mcp } from "@opencode/core/mcp/index"
 import { McpClient } from "@opencode/core/mcp/client"
 import { McpStdio } from "@opencode/core/mcp/stdio"
 import { Permission } from "@opencode/core/permission"
+import { PluginHooks } from "@opencode/core/plugin/hooks"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Session } from "@opencode/core/session"
 import { State } from "@opencode/core/state"
@@ -508,7 +509,8 @@ const permissions = Layer.mock(Permission.Service, {
 })
 const events = Layer.mock(Bus.Service, { subscribe: () => Stream.never })
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Tool.node, McpTool.node]), [
+  AppNodeBuilder.build(LayerNode.group([Tool.node, McpTool.node, PluginHooks.node, Location.node]), [
+    Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
     Mcp.node.replace(mcp),
     Permission.node.replace(permissions),
     Bus.node.replace(events),
@@ -2174,6 +2176,7 @@ testEffect(Layer.empty).live("preserves plugin transforms through MCP catalog up
       Effect.provide(
         Layer.fresh(
           AppNodeBuilder.build(LayerNode.group([Tool.node, McpTool.node, Bus.node]), [
+            Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
             Mcp.node.replace(
               Layer.mock(Mcp.Service, {
                 tools: () => Ref.get(catalog),
@@ -2216,6 +2219,7 @@ testEffect(Layer.empty).effect("coalesces queued MCP tool notifications after in
   }).pipe(
     Effect.provide(
       AppNodeBuilder.build(LayerNode.group([Tool.node, McpTool.node, Bus.node]), [
+        Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
         Mcp.node.replace(
           Layer.mock(Mcp.Service, {
             tools: () =>
@@ -2305,6 +2309,92 @@ it.effect("forwards the invoking session through direct and Code Mode MCP tools"
       args: {},
       sessionID: codeModeSessionID,
     })
+  }),
+)
+
+it.effect("wraps actual Code Mode MCP leaves with mutable input/output hooks and cwd", () =>
+  Effect.gen(function* () {
+    assertion = yield* Deferred.make<Permission.AssertInput>()
+    decision = Effect.void
+    invocations = []
+    const registry = yield* Tool.Service
+    const registration = yield* McpTool.Service
+    const hooks = yield* PluginHooks.Service
+    const location = yield* Location.Service
+    yield* registration.flush
+    yield* registry.transform((editor) =>
+      editor.update("demo_search", (tool) => {
+        tool.input = Schema.Struct({ query: Schema.String })
+      }),
+    )
+    const events: unknown[] = []
+    yield* hooks.register("tool", "execute.before", (event) =>
+      Effect.sync(() => {
+        events.push({ phase: "before", ...event })
+        if (event.tool === "demo_search") event.input = { query: "repaired" }
+      }),
+    )
+    yield* hooks.register("tool", "execute.after", (event) =>
+      Effect.sync(() => {
+        events.push({ phase: "after", ...event })
+        if (event.tool === "demo_search" && event.status === "completed")
+          event.result = { output: { ok: false }, content: "post-hook" }
+      }),
+    )
+    const sessionID = Session.ID.make("ses_mcp_hooks")
+    const snapshot = yield* registry.snapshot()
+    const result = yield* snapshot.execute({
+      sessionID,
+      ...toolIdentity,
+      call: {
+        type: "tool-call",
+        id: "call_mcp_hooks",
+        name: "execute",
+        input: { code: 'return (await tools.demo.search({query: "original"})).ok' },
+      },
+    })
+    expect(invocations).toEqual([{ server: "demo", name: "search", args: { query: "repaired" }, sessionID }])
+    const identity = { sessionID, ...toolIdentity, id: "call_mcp_hooks", cwd: location.directory }
+    expect(events).toMatchObject([
+      { phase: "before", tool: "execute", ...identity },
+      { phase: "before", tool: "demo_search", input: { query: "original" }, ...identity },
+      {
+        phase: "after",
+        tool: "demo_search",
+        input: { query: "repaired" },
+        status: "completed",
+        result: { output: { ok: true } },
+        ...identity,
+      },
+      { phase: "after", tool: "execute", ...identity },
+    ])
+    expect(result.output.output).toBe("false")
+  }),
+)
+
+it.effect("allows a Code Mode MCP leaf hook to reject the actual call", () =>
+  Effect.gen(function* () {
+    invocations = []
+    const registry = yield* Tool.Service
+    const registration = yield* McpTool.Service
+    const hooks = yield* PluginHooks.Service
+    yield* registration.flush
+    yield* hooks.register("tool", "execute.before", (event) =>
+      event.tool === "demo_search" ? Effect.fail(new Tool.Error({ message: "blocked by leaf hook" })) : Effect.void,
+    )
+    const snapshot = yield* registry.snapshot()
+    const result = yield* snapshot.execute({
+      sessionID: Session.ID.make("ses_mcp_hook_denial"),
+      ...toolIdentity,
+      call: {
+        type: "tool-call",
+        id: "call_mcp_hook_denial",
+        name: "execute",
+        input: { code: "return await tools.demo.search({})" },
+      },
+    })
+    expect(invocations).toEqual([])
+    expect(result.output).toMatchObject({ error: true, output: expect.stringContaining("blocked by leaf hook") })
   }),
 )
 

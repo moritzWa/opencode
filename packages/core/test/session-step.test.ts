@@ -21,8 +21,10 @@ import { ToolOutput } from "@opencode/core/tool-output"
 import { Money } from "@opencode/schema/money"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { asc, eq } from "drizzle-orm"
-import { Effect, Exit, Layer } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import { testEffect } from "./lib/effect"
+import { withEnv } from "./fixture/env"
 
 const it = testEffect(
   Layer.merge(
@@ -156,5 +158,93 @@ for (const fixture of [
         types.indexOf(fixture.toolChoice === "none" ? "session.tool.failed.2" : "session.tool.success.2"),
       ).toBeLessThan(types.indexOf(terminal))
     }),
+  )
+}
+
+for (const hosted of [false, true]) {
+  it.effect(`excludes ${hosted ? "provider-hosted" : "local"} tools from the semantic silence deadline`, () =>
+    withEnv({ OPENCODE_STREAM_IDLE_TIMEOUT_MS: "100" }, () =>
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const llm = yield* TestLLM.Test
+        const sessionID = Session.ID.create()
+        yield* db
+          .insert(ProjectTable)
+          .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+          .run()
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: sessionID,
+            project_id: Project.ID.global,
+            slug: "watchdog",
+            directory: "/project",
+            version: "test",
+          })
+          .run()
+        const steps = yield* SessionStep.make.pipe(
+          Effect.provide(
+            Layer.mock(Snapshot.Service)({
+              capture: () => Effect.succeed(undefined),
+            }),
+          ),
+        )
+        const ready = yield* Deferred.make<void>()
+        const model = SessionRunnerModel.resolved(
+          LanguageModel.make({ id: "test-model", provider: "test", route: OpenAIChat.route }),
+          {
+            capabilities: { tools: true, input: ["text"], output: ["text"] },
+            limit: { context: 100_000, output: 1_000 },
+            cost: [],
+          },
+        )
+        yield* llm.push(
+          Stream.make(LLMEvent.toolCall({ id: "slow", name: "test", input: {}, providerExecuted: hosted })).pipe(
+            Stream.concat(
+              Stream.fromEffect(Deferred.succeed(ready, undefined).pipe(Effect.andThen(Effect.sleep(250)))).pipe(
+                Stream.drain,
+              ),
+            ),
+            Stream.concat(
+              Stream.fromIterable(
+                TestLLM.stop(
+                  ...(hosted
+                    ? [
+                        LLMEvent.toolResult({
+                          id: "slow",
+                          name: "test",
+                          providerExecuted: true,
+                          result: { type: "text", value: "done" },
+                        }),
+                      ]
+                    : []),
+                ),
+              ),
+            ),
+          ),
+        )
+        const run = yield* steps
+          .attempt({
+            isLocationClosed: () => false,
+            sessionID,
+            assistantMessageID: SessionMessage.ID.create(),
+            agent: Agent.defaultID,
+            model,
+            prepared: {
+              request: LLM.request({ model: model.model, prompt: "Run a long tool" }),
+              options: {},
+              retry: () => Effect.void,
+              executeTool: () => Effect.sleep(250).pipe(Effect.as({ content: [{ type: "text", text: "done" }] })),
+            },
+            retry: () => Effect.succeed({ retry: false }),
+            recoverContinuation: false,
+            recoverOverflow: Effect.succeed(false),
+          })
+          .pipe(Effect.forkChild({ startImmediately: true }))
+        yield* Deferred.await(ready)
+        yield* TestClock.adjust(250)
+        expect(yield* Fiber.join(run)).toEqual(SessionStep.Outcome.Completed({ needsContinuation: !hosted }))
+      }),
+    ),
   )
 }

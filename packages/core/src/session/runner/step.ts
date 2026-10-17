@@ -28,6 +28,7 @@ import { SessionUsage } from "../usage.js"
 import { SessionRunnerModel } from "./model.js"
 import { createLLMEventPublisher } from "./publish-llm-event.js"
 import { SessionRunnerRetry } from "./retry.js"
+import { SessionWatchdog } from "./watchdog.js"
 
 export type Outcome = Data.TaggedEnum<{
   Completed: { readonly needsContinuation: boolean }
@@ -103,10 +104,13 @@ export const make = Effect.gen(function* () {
     // Provider and tool fibers retain per-source order without a shared writer queue.
     // A local execution starts only after its Tool.Called publication completes.
     let overflowFailure: ProviderErrorEvent | undefined
+    const activity = { at: yield* Clock.currentTimeMillis, tools: 0 }
+    const hostedTools = new Set<string>()
     // Read to the end, not just the finish event, so the next request can reuse this response.
     const providerStream = llm.stream(input.prepared.request, input.prepared.options).pipe(
       Stream.runForEach((event) =>
         Effect.gen(function* () {
+          activity.at = yield* Clock.currentTimeMillis
           if (overflowFailure || publisher.hasProviderError()) return
           // Wait here, where cancellation still works, rather than inside the uninterruptible publish.
           if (!publisher.hasStarted()) yield* Fiber.join(pendingStartSnapshot)
@@ -119,7 +123,15 @@ export const make = Effect.gen(function* () {
             return
           }
           yield* publisher.publish(event)
-          if (event.type !== "tool-call" || event.providerExecuted) return
+          if ((event.type === "tool-result" || event.type === "tool-error") && hostedTools.delete(event.id))
+            activity.tools--
+          if (event.type !== "tool-call") return
+          if (event.providerExecuted) {
+            hostedTools.add(event.id)
+            activity.tools++
+            return
+          }
+          activity.tools++
           toolRuns.push({
             call: event,
             fiber: yield* Effect.uninterruptibleMask((restore) =>
@@ -129,11 +141,18 @@ export const make = Effect.gen(function* () {
                 Effect.catchTag("Tool.Error", (error) =>
                   publisher.failTool(event.id, toSessionError(error), error.metadata).pipe(Effect.asVoid),
                 ),
+                Effect.ensuring(
+                  Effect.gen(function* () {
+                    activity.tools--
+                    activity.at = yield* Clock.currentTimeMillis
+                  }),
+                ),
               ),
             ).pipe(Effect.forkScoped),
           })
         }),
       ),
+      Effect.raceFirst(SessionWatchdog.watch(activity)),
       Effect.ensuring(publisher.flush()),
     )
 

@@ -1,6 +1,8 @@
 import type { Hooks } from "./registration.js"
+import type { Session } from "@opencode/schema/session"
 
 export interface ShellCreateBefore {
+  readonly sessionID?: Session.ID
   command: string
   cwd: string
   timeout: number

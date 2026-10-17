@@ -48,6 +48,7 @@ const readToolNode = makeLocationNode({
     SessionInstructions.node,
     FSUtil.node,
     Location.node,
+    Session.node,
   ],
 })
 
@@ -167,7 +168,7 @@ describe("SessionInstructions", () => {
         registry,
         readCall(sessionID, "call-partial", "sub/other/AGENTS.md", { limit: 1 }),
       )
-      expect(partial.metadata).toEqual({ truncated: true })
+      expect(partial.metadata).toMatchObject({ truncated: true })
       expect(yield* synthetics(sessionID)).toHaveLength(1)
 
       // A sibling read under sub/other discovers only the new AGENTS.md; sub is already

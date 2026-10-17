@@ -43,20 +43,46 @@ import { permissionLayer } from "../lib/permission"
 
 /** Real HTTP executor and durable runner, with only discovery/model inventory
  * supplied by the fixture. Tools are production registrations, never copies. */
-export function recoveryRunnerLayer(directory: string, baseURL: string, primary?: LanguageModel, database = ":memory:") {
+export function recoveryRunnerLayer(
+  directory: string,
+  baseURL: string,
+  primary?: LanguageModel,
+  database = ":memory:",
+) {
   const client = LLMClient.layer.pipe(Layer.provide(RequestExecutor.layer), Layer.provide(FetchHttpClient.layer))
   const models = Layer.mock(SessionRunnerModel.Service)({
-    resolve: (session) => Effect.succeed(SessionRunnerModel.resolved(
-      !session.model && primary ? primary : OpenAIChat.route.with({ endpoint: { baseURL }, auth: Auth.bearer("fixture") }).model({ id: session.model?.id ?? "claude-subscription" }),
-      { capabilities: { tools: true, input: ["text"], output: ["text"] }, cost: [], limit: { context: 200000, output: 1000 } },
-    )),
+    resolve: (session) =>
+      Effect.succeed(
+        SessionRunnerModel.resolved(
+          !session.model && primary
+            ? primary
+            : OpenAIChat.route
+                .with({ endpoint: { baseURL }, auth: Auth.bearer("fixture") })
+                .model({ id: session.model?.id ?? "claude-subscription" }),
+          {
+            capabilities: { tools: true, input: ["text"], output: ["text"] },
+            cost: [],
+            limit: { context: 200000, output: 1000 },
+          },
+        ),
+      ),
   })
   const builtins = Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(Instructions.empty) })
-  const discovery = Layer.mock(InstructionDiscovery.Service, { project: true, global: true, load: () => Effect.succeed(Instructions.empty) })
+  const discovery = Layer.mock(InstructionDiscovery.Service, {
+    project: true,
+    global: true,
+    load: () => Effect.succeed(Instructions.empty),
+  })
   const skills = Layer.mock(SkillInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
   const references = Layer.mock(ReferenceInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
   const mcp = Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
-  const inventory = Layer.mock(Model.Service, { get: () => Effect.undefined, all: () => Effect.succeed([]), available: () => Effect.succeed([]), default: () => Effect.undefined, small: () => Effect.undefined })
+  const inventory = Layer.mock(Model.Service, {
+    get: () => Effect.undefined,
+    all: () => Effect.succeed([]),
+    available: () => Effect.succeed([]),
+    default: () => Effect.undefined,
+    small: () => Effect.undefined,
+  })
   const permission = permissionLayer({ assert: () => Effect.void })
   const replacements: LayerNode.Replacements = [
     Database.node.replace(Database.configured({ path: database })),
@@ -75,20 +101,47 @@ export function recoveryRunnerLayer(directory: string, baseURL: string, primary?
     Plugin.node.replace(Layer.mock(Plugin.Service, { awaitActivation: Effect.void })),
   ]
   const runner = AppNodeBuilder.build(SessionRunnerLLM.node, replacements)
-  const execution = Layer.effect(SessionExecution.Service, Effect.gen(function* () {
-    const sessions = yield* SessionRunner.Service
-    const coordinator = yield* SessionRunCoordinator.make<Session.ID, SessionRunner.RunError>({ drain: (sessionID, force) => sessions.drain({ sessionID, force }).pipe(Effect.asVoid) })
-    return SessionExecution.Service.of({ active: coordinator.active, isActive: coordinator.isActive, resume: coordinator.run, wake: coordinator.wake, interrupt: (sessionID) => coordinator.interrupt(sessionID), awaitIdle: coordinator.awaitIdle })
-  })).pipe(Layer.provide(runner), Layer.orDie)
-  return AppNodeBuilder.build(LayerNode.group([
-    Database.node, Bus.node, SessionProjector.node, SessionStore.node,
-    Agent.node, Model.node, PluginHooks.node, Tool.node, SessionRunnerLLM.node,
-    Session.node, FileAccess.node, FileMutation.node, Formatter.node, Environment.node, Permission.node,
-  ]), [
-    ...replacements,
-    Bus.node.replace(Bus.configured({ persist: true })),
-    LocationServiceMap.node.replace(promptLocationNode),
-    Model.node.replace(inventory),
-    SessionExecution.node.replace(execution),
-  ])
+  const execution = Layer.effect(
+    SessionExecution.Service,
+    Effect.gen(function* () {
+      const sessions = yield* SessionRunner.Service
+      const coordinator = yield* SessionRunCoordinator.make<Session.ID, SessionRunner.RunError>({
+        drain: (sessionID, force) => sessions.drain({ sessionID, force }).pipe(Effect.asVoid),
+      })
+      return SessionExecution.Service.of({
+        active: coordinator.active,
+        isActive: coordinator.isActive,
+        resume: coordinator.run,
+        wake: coordinator.wake,
+        interrupt: (sessionID) => coordinator.interrupt(sessionID),
+        awaitIdle: coordinator.awaitIdle,
+      })
+    }),
+  ).pipe(Layer.provide(runner), Layer.orDie)
+  return AppNodeBuilder.build(
+    LayerNode.group([
+      Database.node,
+      Bus.node,
+      SessionProjector.node,
+      SessionStore.node,
+      Agent.node,
+      Model.node,
+      PluginHooks.node,
+      Tool.node,
+      SessionRunnerLLM.node,
+      Session.node,
+      FileAccess.node,
+      FileMutation.node,
+      Formatter.node,
+      Environment.node,
+      Permission.node,
+    ]),
+    [
+      ...replacements,
+      Bus.node.replace(Bus.configured({ persist: true })),
+      LocationServiceMap.node.replace(promptLocationNode),
+      Model.node.replace(inventory),
+      SessionExecution.node.replace(execution),
+    ],
+  )
 }

@@ -24,6 +24,7 @@ export interface ToolHooks {
     readonly agent: Agent.ID
     readonly messageID: SessionMessage.ID
     readonly id: Tool.CallID
+    readonly cwd?: string
     input: unknown
   }
   readonly "execute.after": {
@@ -32,6 +33,7 @@ export interface ToolHooks {
     readonly agent: Agent.ID
     readonly messageID: SessionMessage.ID
     readonly id: Tool.CallID
+    readonly cwd?: string
     readonly input: unknown
   } & (
     | {

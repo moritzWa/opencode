@@ -3,6 +3,8 @@ import { Agent } from "@opencode/core/agent"
 import type { Permission } from "@opencode/core/permission"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { Image } from "@opencode/core/image"
+import { Location } from "@opencode/core/location"
+import { AbsolutePath } from "@opencode/core/schema"
 import { PluginHooks } from "@opencode/core/plugin/hooks"
 import { Session } from "@opencode/core/session"
 import { SessionMessage } from "@opencode/core/session/message"
@@ -38,6 +40,7 @@ const imageStore = Layer.mock(Image.Service, {
   },
 })
 const registryLayer = AppNodeBuilder.build(LayerNode.group([Tool.node, PluginHooks.node]), [
+  Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
   Image.node.replace(imageStore),
 ])
 const it = testEffect(registryLayer)

@@ -17,19 +17,31 @@ export const make = Effect.gen(function* () {
   const bus = yield* Bus.Service
   const hooks = yield* PluginHooks.Service
   const userMessageID = Effect.fn("SessionRunnerRecovery.userMessageID")(function* (sessionID: SessionSchema.ID) {
-    const row = yield* db.select({ id: SessionMessageTable.id }).from(SessionMessageTable)
+    const row = yield* db
+      .select({ id: SessionMessageTable.id })
+      .from(SessionMessageTable)
       .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "user")))
-      .orderBy(desc(SessionMessageTable.seq)).limit(1).get().pipe(Effect.orDie)
+      .orderBy(desc(SessionMessageTable.seq))
+      .limit(1)
+      .get()
+      .pipe(Effect.orDie)
     return row?.id
   })
   const recover = Effect.fn("SessionRunnerRecovery.recover")(function* (input: Omit<SessionRecovery, "decision">) {
     if (!(yield* hooks.has("session", "recovery", input.model.providerID))) return false
-    const previous = yield* db.select({ id: SessionMessageTable.id }).from(SessionMessageTable)
-      .where(and(
-        eq(SessionMessageTable.session_id, input.sessionID),
-        eq(SessionMessageTable.type, "synthetic"),
-        sql`json_extract(${SessionMessageTable.data}, '$.metadata.recovery.userMessageID') = ${input.userMessageID}`,
-      )).limit(1).get().pipe(Effect.orDie)
+    const previous = yield* db
+      .select({ id: SessionMessageTable.id })
+      .from(SessionMessageTable)
+      .where(
+        and(
+          eq(SessionMessageTable.session_id, input.sessionID),
+          eq(SessionMessageTable.type, "synthetic"),
+          sql`json_extract(${SessionMessageTable.data}, '$.metadata.recovery.userMessageID') = ${input.userMessageID}`,
+        ),
+      )
+      .limit(1)
+      .get()
+      .pipe(Effect.orDie)
     if (previous) return false
     const event: SessionRecovery = { ...input }
     yield* hooks.trigger("session", "recovery", event)
@@ -42,12 +54,21 @@ export const make = Effect.gen(function* () {
     if (decision.model.providerID === input.model.providerID && decision.model.id === input.model.id) return false
     yield* bus.publishAll([
       [SessionEvent.ModelSelected, { sessionID: input.sessionID, model: decision.model, previous: input.model }],
-      [SessionEvent.Synthetic, {
-        sessionID: input.sessionID,
-        text: "The previous model could not continue. Continue the outstanding request from the recorded history without repeating completed content or tools.",
-        description: `Model recovery: ${input.model.providerID}/${input.model.id} → ${decision.model.providerID}/${decision.model.id}`,
-        metadata: { recovery: { userMessageID: input.userMessageID, assistantMessageID: input.assistantMessageID, reason: decision.reason } },
-      }],
+      [
+        SessionEvent.Synthetic,
+        {
+          sessionID: input.sessionID,
+          text: "The previous model could not continue. Continue the outstanding request from the recorded history without repeating completed content or tools.",
+          description: `Model recovery: ${input.model.providerID}/${input.model.id} → ${decision.model.providerID}/${decision.model.id}`,
+          metadata: {
+            recovery: {
+              userMessageID: input.userMessageID,
+              assistantMessageID: input.assistantMessageID,
+              reason: decision.reason,
+            },
+          },
+        },
+      ],
     ])
     // publishAll is one DB transaction: a crash observes both model and marker
     // or neither. Existing execution restart claims resume the recorded history.

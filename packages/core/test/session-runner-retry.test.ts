@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { AIError, ProviderInternalError, TransportError } from "@opencode/ai"
+import { AIError, ProviderInternalError, TransportError, UnknownProviderError } from "@opencode/ai"
 import { Agent } from "@opencode/schema/agent"
 import { Model } from "@opencode/schema/model"
 import { Provider } from "@opencode/core/provider"
@@ -13,6 +13,14 @@ const timeout = new AIError({
   reason: new TransportError({ message: "Timed out", transport: "http", operation: "request", code: "Timeout" }),
 })
 const internal = new AIError({ reason: new ProviderInternalError({ message: "internal" }) })
+const disconnected = new AIError({
+  reason: new TransportError({
+    message: "Unable to connect",
+    transport: "http",
+    operation: "request",
+    code: "ConnectionRefused",
+  }),
+})
 
 const input = (cause: AIError) => ({
   cause,
@@ -42,6 +50,24 @@ describe("SessionRunnerRetry.policy", () => {
   it.effect("keeps the general allowance for other transient failures", () =>
     Effect.gen(function* () {
       expect(yield* decisions(internal, 11)).toEqual([...Array(10).fill(true), false])
+    }),
+  )
+
+  it.effect("waits out long network outages without extending provider failure retries", () =>
+    Effect.gen(function* () {
+      expect(yield* decisions(disconnected, 721)).toEqual([...Array(720).fill(true), false])
+    }),
+  )
+
+  it.effect("recognizes native network codes beneath provider wrappers", () =>
+    Effect.gen(function* () {
+      const wrapped = new AIError({
+        reason: new UnknownProviderError({
+          message: "provider request failed",
+          cause: { cause: { cause: { code: "ECONNRESET" } } },
+        }),
+      })
+      expect(yield* decisions(wrapped, 12)).toEqual(Array(12).fill(true))
     }),
   )
 })

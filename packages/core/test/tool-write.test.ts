@@ -10,6 +10,7 @@ import { Environment } from "@opencode/core/environment/index"
 import { Location } from "@opencode/core/location"
 import { FileAccess } from "@opencode/core/file-access"
 import { Permission } from "@opencode/core/permission"
+import { PluginHooks } from "@opencode/core/plugin/hooks"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Session } from "@opencode/core/session"
 import { Tool } from "@opencode/core/tool"
@@ -79,17 +80,20 @@ const withTool = <A, E, R>(
     return yield* body(registry)
   }).pipe(
     Effect.provide(
-      AppNodeBuilder.build(LayerNode.group([Tool.node, FileAccess.node, FileMutation.node, writeToolNode]), [
-        Environment.node.replace(
-          transformEnvironmentFiles((files) => ({
-            write: (target, content) =>
-              Effect.sync(() => fixture.writes.push(target)).pipe(Effect.andThen(files.write(target, content))),
-          })),
-        ),
-        Location.node.replace(activeLocation),
-        Formatter.node.replace(fixture.formatter),
-        Permission.node.replace(fixture.permission),
-      ]),
+      AppNodeBuilder.build(
+        LayerNode.group([Tool.node, PluginHooks.node, FileAccess.node, FileMutation.node, writeToolNode]),
+        [
+          Environment.node.replace(
+            transformEnvironmentFiles((files) => ({
+              write: (target, content) =>
+                Effect.sync(() => fixture.writes.push(target)).pipe(Effect.andThen(files.write(target, content))),
+            })),
+          ),
+          Location.node.replace(activeLocation),
+          Formatter.node.replace(fixture.formatter),
+          Permission.node.replace(fixture.permission),
+        ],
+      ),
     ),
   )
 }
@@ -109,7 +113,24 @@ describe("WriteTool", () => {
       return withTool(tmp.path, fixture, (registry) =>
         Effect.gen(function* () {
           expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["write", "execute"])
+          const hooks = yield* PluginHooks.Service
+          const events: unknown[] = []
+          yield* hooks.register("tool", "execute.after", (event) =>
+            Effect.sync(() => {
+              events.push(event)
+            }),
+          )
           const settled = yield* executeTool(registry, call({ path: "src/new.txt", content: "created" }))
+          expect(events).toMatchObject([
+            {
+              tool: "write",
+              sessionID,
+              cwd: tmp.path,
+              input: { path: "src/new.txt", content: "created" },
+              status: "completed",
+              result: { output: { operation: "write" } },
+            },
+          ])
           expect(settled).toEqual({
             status: "completed",
             output: {

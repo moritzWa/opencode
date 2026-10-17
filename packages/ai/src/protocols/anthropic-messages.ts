@@ -1027,6 +1027,21 @@ const applyThinkingBindingDefault = (model: LLMRequest["model"], thinking: Anthr
   }
 }
 
+// These models write user-facing notes between tool calls as thinking progress updates.
+// The provider's omitted default otherwise returns an empty block for those notes.
+const applyProgressDefault = (model: LLMRequest["model"], thinking: AnthropicThinking | undefined) => {
+  if (thinking && (thinking.type !== "adaptive" || thinking.display !== undefined)) return thinking
+  const version = claudeVersion(model.id)
+  if (!version) return thinking
+  const supported =
+    version.family === "fable"
+      ? version.major >= 5
+      : version.family === "mythos"
+        ? version.major > 5 || (version.major === 5 && version.minor >= 1)
+        : version.major > 5 || (version.major === 5 && version.minor >= 5)
+  return supported ? { ...thinking, type: "adaptive" as const, display: "summarized" as const } : thinking
+}
+
 // Anthropic also requires an explicit thinking budget below `max_tokens` and at or above its minimum.
 const fitThinking = (thinking: AnthropicThinking | undefined, maxTokens: number) =>
   thinking?.type === "enabled"
@@ -1081,7 +1096,10 @@ const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (reques
     top_p: generation?.topP,
     top_k: generation?.topK,
     stop_sequences: generation?.stop,
-    thinking: applyThinkingBindingDefault(request.model, fitThinking(options.thinking, maxTokens)),
+    thinking: applyThinkingBindingDefault(
+      request.model,
+      applyProgressDefault(request.model, fitThinking(options.thinking, maxTokens)),
+    ),
     output_config,
     // top-level passthrough per SDK MessageCreateParamsBase:4638,4643,4649,4654,4670
     cache_control: options.cache_control ?? options.cacheControl,
@@ -1384,10 +1402,7 @@ const onContentBlockDelta = Effect.fnUntraced(function* (
   return [state, NO_EVENTS] satisfies StepResult
 })
 
-const onContentBlockStop = Effect.fnUntraced(function* (
-  state: ParserState,
-  event: AnthropicEvent,
-) {
+const onContentBlockStop = Effect.fnUntraced(function* (state: ParserState, event: AnthropicEvent) {
   if (event.index === undefined) return [state, NO_EVENTS] satisfies StepResult
   if (event.index in state.compactions) {
     const { [event.index]: content, ...compactions } = state.compactions

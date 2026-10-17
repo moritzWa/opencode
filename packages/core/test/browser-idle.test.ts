@@ -7,6 +7,7 @@ import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import { Global } from "@opencode/util/global"
 import { Bus } from "@opencode/core/bus"
 import { Database } from "@opencode/core/database/database"
+import { Job } from "@opencode/core/job"
 import { Location } from "@opencode/core/location"
 import { LocationActivity } from "@opencode/core/location-activity"
 import { LocationServiceMap } from "@opencode/core/location-services"
@@ -49,7 +50,7 @@ const it = testEffect(
           layer: LocationActivity.layer({ timeToLive, sweepInterval: "100 millis" }).pipe(
             Layer.provide(Layer.succeed(Clock.Clock, activityClock)),
           ),
-          deps: [Bus.node, LocationServiceMap.node, SessionExecution.node, SessionStore.node],
+          deps: [Bus.node, LocationServiceMap.node, SessionExecution.node, SessionStore.node, Job.node],
         }),
       ),
     ],

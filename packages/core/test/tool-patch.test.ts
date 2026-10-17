@@ -11,6 +11,7 @@ import { Location } from "@opencode/core/location"
 import { FileAccess } from "@opencode/core/file-access"
 import { Model } from "@opencode/core/model"
 import { Permission } from "@opencode/core/permission"
+import { PluginHooks } from "@opencode/core/plugin/hooks"
 import { Provider } from "@opencode/core/provider"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Session } from "@opencode/core/session"
@@ -113,31 +114,36 @@ const withTool = <A, E, R>(
     return yield* body(yield* Tool.Service)
   }).pipe(
     Effect.provide(
-      AppNodeBuilder.build(LayerNode.group([Tool.node, FileAccess.node, FileMutation.node, patchToolNode]), [
-        Environment.node.replace(
-          transformEnvironmentFiles((files) => ({
-            read: (target, range) =>
-              Effect.sync(() => {
-                if (!editApproved) readsBeforeEditApproval++
-              }).pipe(Effect.andThen(files.read(target, range))),
-            remove: (target) => {
-              if (failRemoveTarget && path.basename(target) === failRemoveTarget)
-                return Effect.die("forced remove failure")
-              if (failRemoveErrorTarget && path.basename(target) === failRemoveErrorTarget)
-                return Effect.fail(new Environment.Failed({ path: target, cause: new Error("forced remove failure") }))
-              return files.remove(target)
-            },
-            write: (target, content) => {
-              if (failWriteTarget && path.basename(target) === failWriteTarget)
-                return Effect.fail(new Environment.Failed({ path: target, cause: new Error("forced write failure") }))
-              return files.write(target, content)
-            },
-          })),
-        ),
-        Location.node.replace(activeLocation),
-        Formatter.node.replace(formatter),
-        Permission.node.replace(permission),
-      ]),
+      AppNodeBuilder.build(
+        LayerNode.group([Tool.node, PluginHooks.node, FileAccess.node, FileMutation.node, patchToolNode]),
+        [
+          Environment.node.replace(
+            transformEnvironmentFiles((files) => ({
+              read: (target, range) =>
+                Effect.sync(() => {
+                  if (!editApproved) readsBeforeEditApproval++
+                }).pipe(Effect.andThen(files.read(target, range))),
+              remove: (target) => {
+                if (failRemoveTarget && path.basename(target) === failRemoveTarget)
+                  return Effect.die("forced remove failure")
+                if (failRemoveErrorTarget && path.basename(target) === failRemoveErrorTarget)
+                  return Effect.fail(
+                    new Environment.Failed({ path: target, cause: new Error("forced remove failure") }),
+                  )
+                return files.remove(target)
+              },
+              write: (target, content) => {
+                if (failWriteTarget && path.basename(target) === failWriteTarget)
+                  return Effect.fail(new Environment.Failed({ path: target, cause: new Error("forced write failure") }))
+                return files.write(target, content)
+              },
+            })),
+          ),
+          Location.node.replace(activeLocation),
+          Formatter.node.replace(formatter),
+          Permission.node.replace(permission),
+        ],
+      ),
     ),
   )
 }
@@ -209,6 +215,13 @@ describe("PatchTool", () => {
             withTool(tmp.path, (registry) =>
               Effect.gen(function* () {
                 expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["patch", "execute"])
+                const hooks = yield* PluginHooks.Service
+                const events: unknown[] = []
+                yield* hooks.register("tool", "execute.after", (event) =>
+                  Effect.sync(() => {
+                    events.push(event)
+                  }),
+                )
                 const settled = yield* executeTool(
                   registry,
                   call(
@@ -216,6 +229,16 @@ describe("PatchTool", () => {
                   ),
                 )
                 expect(settled.status).toBe("completed")
+                expect(events).toMatchObject([
+                  {
+                    tool: "patch",
+                    sessionID,
+                    cwd: tmp.path,
+                    input: { patchText: expect.stringContaining("*** Add File: nested/new.txt") },
+                    status: "completed",
+                    result: { output: { applied: expect.any(Array) } },
+                  },
+                ])
                 if (settled.status !== "completed") return
                 expect(settled.content).toEqual([
                   {

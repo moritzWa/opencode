@@ -5,6 +5,7 @@ import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { Permission } from "@opencode/core/permission"
 import { KV } from "@opencode/core/kv"
+import { Location } from "@opencode/core/location"
 import { Form } from "@opencode/core/form"
 import { WebSearch } from "@opencode/core/websearch"
 import { Session } from "@opencode/core/session"
@@ -19,6 +20,7 @@ import { permissionLayer } from "./lib/permission"
 import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions } from "./lib/tool"
 import { webSearchHost } from "./plugin/host"
 import { TestWebSearch } from "./lib/websearch"
+import { tempLocationLayer } from "./fixture/location"
 
 const webSearchToolNode = makeLocationNode({
   name: "test/websearch-tool-plugin",
@@ -70,6 +72,7 @@ const setup = Effect.gen(function* () {
   )
   const context = yield* Layer.build(
     AppNodeBuilder.build(LayerNode.group([Tool.node, webSearchToolNode]), [
+      Location.node.replace(tempLocationLayer),
       Permission.node.replace(
         permissionLayer({
           assert: (input) =>

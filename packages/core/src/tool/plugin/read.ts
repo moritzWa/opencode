@@ -11,6 +11,7 @@ import { SessionInstructions } from "../../session/instructions.js"
 import { AbsolutePath } from "../../schema.js"
 import { ReadToolFileSystem } from "../read-filesystem.js"
 import { Environment } from "../../environment/index.js"
+import { Session } from "../../session.js"
 
 export const name = "read"
 const FILENAME = "AGENTS.md"
@@ -34,6 +35,7 @@ export const Plugin = {
     const sessionInstructions = yield* SessionInstructions.Service
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
+    const sessions = yield* Session.Service
 
     yield* ctx.tool
       .transform((editor) =>
@@ -111,12 +113,41 @@ export const Plugin = {
                 !ReadToolFileSystem.MEDIA_MIMES.has(result.content.mime)
               )
                 return yield* Effect.fail(new ReadToolFileSystem.BinaryFileError({ resource: result.target.resource }))
-              return { output: result.content, path: result.path }
+              const content = toModelContent(result.path, input.offset, result.content)
+              if (result.content.type === "list-page" || typeof content !== "string")
+                return { output: result.content, content }
+              const readHash = Bun.hash(`${result.target.absolute}\u0000${content}`).toString()
+              const history = yield* sessions.context(context.sessionID).pipe(Effect.orElseSucceed(() => []))
+              // Only a full output still in the current context is evidence. Suppressed reads
+              // carry no hash, and retained metadata alone cannot keep a pruned output alive.
+              const seen = history.some(
+                (message) =>
+                  message.type === "assistant" &&
+                  message.content.some(
+                    (part) =>
+                      part.type === "tool" &&
+                      part.name === name &&
+                      part.state.status === "completed" &&
+                      part.state.metadata?.readHash === readHash &&
+                      part.state.content.some((item) => item.type === "text" && item.text === content),
+                  ),
+              )
+              return {
+                output: result.content,
+                content: seen
+                  ? `Read file ${result.path}: this range is unchanged since you read it earlier in this conversation. Use that earlier output; it is still current.`
+                  : content,
+                ...(seen ? { unchanged: true } : { readHash }),
+              }
             }).pipe(
               Effect.map((result) => ({
                 output: result.output,
-                content: toModelContent(result.path, input.offset, result.output),
-                metadata: { truncated: result.output.type === "file" ? false : result.output.truncated },
+                content: result.content,
+                metadata: {
+                  truncated: result.output.type === "file" ? false : result.output.truncated,
+                  ...("readHash" in result && result.readHash !== undefined ? { readHash: result.readHash } : {}),
+                  ...("unchanged" in result && result.unchanged ? { unchanged: true } : {}),
+                },
               })),
               Effect.mapError((error) => {
                 if (error instanceof ToolFailure) return error

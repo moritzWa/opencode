@@ -32,6 +32,7 @@ import { Permission } from "@opencode/core/permission"
 import { PermissionSaved } from "@opencode/core/permission/saved"
 import { Plugin } from "@opencode/core/plugin"
 import { PluginSupervisor } from "@opencode/core/plugin/supervisor"
+import { PluginHooks } from "@opencode/core/plugin/hooks"
 import { Shell } from "@opencode/core/shell"
 import { ShellSelect } from "@opencode/core/shell/select"
 import { ID } from "@opencode/schema/shell"
@@ -847,6 +848,53 @@ describe("ShellTool ordinary shell syntax", () => {
 })
 
 describe("ShellTool", () => {
+  for (const codemode of [false, true]) {
+    it.live(`injects the originating shell session and resolved cwd through hooks (Code Mode: ${codemode})`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        reset()
+        yield* Effect.promise(() => fs.mkdir(path.join(tmp.path, "child")))
+        yield* withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const hooks = yield* PluginHooks.Service
+            const seen: unknown[] = []
+            yield* hooks.register("shell", "create.before", (event) =>
+              Effect.sync(() => {
+                seen.push({ sessionID: event.sessionID, cwd: event.cwd })
+                event.env.CLAUDE_CODE_SESSION_ID = event.sessionID
+              }),
+            )
+            if (codemode)
+              yield* registry.transform((editor) =>
+                editor.update("shell", (tool) => {
+                  tool.options = { ...tool.options, codemode: true }
+                }),
+              )
+            const input = {
+              command: isWindows
+                ? "[Console]::Out.Write($env:CLAUDE_CODE_SESSION_ID)"
+                : 'printf %s "$CLAUDE_CODE_SESSION_ID"',
+              workdir: "child",
+            }
+            const result = yield* executeTool(registry, {
+              ...call(input),
+              call: codemode
+                ? {
+                    type: "tool-call",
+                    id: "call-shell-hooks",
+                    name: "execute",
+                    input: { code: `return (await tools.shell(${JSON.stringify(input)})).output` },
+                  }
+                : call(input).call,
+            })
+            expect(result).toMatchObject({ status: "completed", content: [{ type: "text", text: sessionID }] })
+            expect(seen).toEqual([{ sessionID, cwd: path.join(tmp.path, "child") }])
+          }),
+        )
+      }),
+    )
+  }
+
   it.live("returns both parallel CodeMode shell results", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),

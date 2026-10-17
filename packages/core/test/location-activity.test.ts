@@ -8,6 +8,10 @@ import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import { Bus } from "@opencode/core/bus"
 import { Database } from "@opencode/core/database/database"
 import { Form } from "@opencode/core/form"
+import { Job } from "@opencode/core/job"
+import { Pty } from "@opencode/core/pty"
+import { Service } from "@opencode/core/shell"
+import { Shell } from "@opencode/schema/shell"
 import { Location } from "@opencode/core/location"
 import { LocationActivity } from "@opencode/core/location-activity"
 import { LocationServiceMap, type LocationServices } from "@opencode/core/location-services"
@@ -17,11 +21,19 @@ import { AbsolutePath } from "@opencode/core/schema"
 import { Session } from "@opencode/core/session"
 import { SessionExecution } from "@opencode/core/session/execution"
 import { SessionEvent } from "@opencode/core/session/event"
+import { SessionMessage } from "@opencode/core/session/message"
 import { SessionRunner } from "@opencode/core/session/runner/index"
 import { SessionTable } from "@opencode/core/session/sql"
 import { SessionStore } from "@opencode/core/session/store"
 import { Workspace } from "@opencode/core/workspace"
 import { testEffect } from "./lib/effect"
+
+class Processes extends Context.Service<Processes, { shells: Shell.Info[]; ptys: Pty.Info[] }>()("test/Processes") {}
+const processesNode = makeGlobalNode({
+  service: Processes,
+  layer: Layer.sync(Processes, () => ({ shells: [], ptys: [] })),
+  deps: [],
+})
 
 // Keep real execution ownership, location caching, forms, and eviction. The fixture
 // runner waits on a form instead of making a model request before asking a question.
@@ -29,11 +41,12 @@ const locations = Layer.effect(
   LocationServiceMap.Service,
   Effect.gen(function* () {
     const bus = yield* Bus.Service
+    const processes = yield* Processes
     const map = yield* LayerMap.make(
       (ref: Location.Ref) =>
-        // The fixture only exercises these three Location services.
+        // Only the Location services exercised by execution and eviction are needed.
         // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
-        Layer.merge(
+        Layer.mergeAll(
           Layer.succeed(
             Location.Service,
             Location.Service.of({
@@ -62,6 +75,8 @@ const locations = Layer.effect(
               })
             }),
           ),
+          Layer.mock(Service)({ list: () => Effect.succeed(processes.shells) }),
+          Layer.mock(Pty.Service)({ list: () => Effect.succeed(processes.ptys) }),
         ).pipe(
           Layer.provideMerge(Form.layer),
           Layer.provide(Layer.succeed(Bus.Service, bus)),
@@ -83,6 +98,8 @@ const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
+      Job.node,
+      processesNode,
       Bus.node,
       SessionStore.node,
       LocationServiceMap.node,
@@ -94,7 +111,7 @@ const it = testEffect(
         makeGlobalNode({
           service: LocationServiceMap.Service,
           layer: locations,
-          deps: [Bus.node],
+          deps: [Bus.node, processesNode],
         }),
       ),
     ],
@@ -102,6 +119,78 @@ const it = testEffect(
 )
 
 describe("LocationActivity eviction", () => {
+  for (const kind of ["shell", "pty", "job"] as const) {
+    it.effect(`retains a location with a running background ${kind} until it settles`, () =>
+      Effect.gen(function* () {
+        const map = yield* LocationServiceMap.Service
+        const processes = yield* Processes
+        const jobs = yield* Job.Service
+        const db = (yield* Database.Service).db
+        const ref = Location.Ref.make({ directory: AbsolutePath.make("/background") })
+        const sessionID = Session.ID.make("ses_background")
+        yield* db
+          .insert(ProjectTable)
+          .values({ id: Project.ID.global, worktree: ref.directory, sandboxes: [] })
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: sessionID,
+            project_id: Project.ID.global,
+            slug: "background",
+            directory: ref.directory,
+            title: "Background",
+            version: "test",
+          })
+          .run()
+          .pipe(Effect.orDie)
+        yield* map.contextEffect(ref).pipe(Effect.scoped)
+        const done = yield* Deferred.make<string>()
+        if (kind === "shell")
+          processes.shells.push({
+            id: Shell.ID.make("sh_background"),
+            status: "running",
+            command: "build",
+            cwd: ref.directory,
+            shell: "sh",
+            file: "/background/output",
+            metadata: {},
+            time: { started: 0 },
+          })
+        if (kind === "pty")
+          processes.ptys.push({
+            id: Pty.ID.make("pty_background"),
+            status: "running",
+            command: "sh",
+            args: [],
+            cwd: ref.directory,
+            title: "Terminal",
+            pid: 1,
+          })
+        if (kind === "job")
+          yield* jobs
+            .start({
+              id: "background",
+              type: "shell",
+              notificationID: SessionMessage.ID.create(),
+              recovery: { kind: "shell", sessionID, shellID: "sh_background", command: "build" },
+              run: Deferred.await(done),
+            })
+            .pipe(Effect.andThen(jobs.background("background")))
+        yield* TestClock.adjust("1 minute")
+        yield* TestClock.adjust("62 minutes")
+        expect(Array.from(yield* RcMap.keys(map.rcMap))).toEqual([ref])
+        processes.shells.length = 0
+        processes.ptys.length = 0
+        yield* Deferred.succeed(done, "Finished")
+        if (kind === "job") yield* jobs.wait({ id: "background" })
+        yield* TestClock.adjust("62 minutes")
+        expect(Array.from(yield* RcMap.keys(map.rcMap))).toEqual([])
+      }),
+    )
+  }
+
   for (const [count, admission] of [
     [1, "none"],
     [2, "none"],
@@ -110,7 +199,7 @@ describe("LocationActivity eviction", () => {
   ] as const) {
     const newWork = admission !== "none"
     it.effect(
-      `interrupts ${count} waiting executions before eviction (${admission} session admitted during cleanup)`,
+      `retains ${count} waiting executions until explicitly interrupted (${admission} session admitted during cleanup)`,
       () =>
         Effect.gen(function* () {
           const db = (yield* Database.Service).db
@@ -177,9 +266,12 @@ describe("LocationActivity eviction", () => {
           // Human input produces no durable activity while the question is pending.
           yield* TestClock.adjust("1 minute")
           yield* TestClock.adjust("62 minutes")
-          // Interruption has cancelled each question, but slow cleanup still owns the graph.
+          // Neither a quiet provider nor a pending question makes an execution idle.
           expect(Array.from(yield* execution.active).toSorted()).toEqual(sessionIDs.toSorted())
           expect(Array.from(yield* RcMap.keys(map.rcMap))).toEqual([ref])
+          expect(yield* forms.list()).toHaveLength(count)
+          expect(interrupted).toEqual([])
+          yield* Effect.forEach(sessionIDs, (sessionID) => execution.interrupt(sessionID))
           expect(yield* forms.list()).toEqual([])
           for (const form of pending) expect(yield* forms.state(form.id)).toEqual({ status: "cancelled" })
 
@@ -190,11 +282,12 @@ describe("LocationActivity eviction", () => {
           yield* TestClock.adjust("5 minutes")
           if (newWork) yield* Deferred.await(newCreated)
           const results = yield* Effect.forEach(running, Fiber.join)
+          if (!newWork) yield* TestClock.adjust("62 minutes")
           expect(results.every((exit) => exit._tag === "Failure")).toBe(true)
           expect(Array.from(yield* execution.active)).toEqual(newWork ? [newcomer] : [])
           expect(yield* store.listSuspended()).toEqual(newWork ? [newcomer] : [])
           expect(interrupted.toSorted((a, b) => a.sessionID.localeCompare(b.sessionID))).toEqual(
-            sessionIDs.map((sessionID) => ({ sessionID, reason: "inactivity" })),
+            sessionIDs.map((sessionID) => ({ sessionID, reason: "user" })),
           )
           expect(Array.from(yield* RcMap.keys(map.rcMap))).toEqual(newWork ? [ref] : [])
           if (newWork) {
