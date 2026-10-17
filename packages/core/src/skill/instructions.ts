@@ -73,7 +73,7 @@ const layer = Layer.effect(
       load: Effect.fn("SkillInstructions.load")(function* (permissions) {
         const available = Skill.available(yield* skills.list(), permissions)
           .flatMap((skill) =>
-            skill.description === undefined || skill.autoinvoke === false
+            !skill.description?.trim() || skill.autoinvoke === false
               ? []
               : [{ id: skill.id, name: skill.name, description: skill.description }],
           )

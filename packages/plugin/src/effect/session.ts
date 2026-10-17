@@ -170,6 +170,7 @@ export interface SessionHooks {
 export type SessionDomain = Pick<
   SessionApi<unknown>,
   | "list"
+  | "active"
   | "create"
   | "get"
   | "remove"

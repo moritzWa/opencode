@@ -198,6 +198,8 @@ import type {
   CommandListOutput,
   SkillListInput,
   SkillListOutput,
+  SkillDiagnosticsInput,
+  SkillDiagnosticsOutput,
   RpcCallInput,
   RpcCallOutput,
   EventSubscribeOutput,
@@ -1748,6 +1750,18 @@ export function make(options: ClientOptions) {
             query: { location: input?.["location"] },
             successStatus: 200,
             declaredStatuses: [400, 401, 404],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      diagnostics: (input?: SkillDiagnosticsInput, requestOptions?: RequestOptions) =>
+        request<SkillDiagnosticsOutput>(
+          {
+            method: "GET",
+            path: `/api/skill/diagnostics`,
+            query: { location: input?.["location"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401, 404, 503],
             empty: false,
           },
           requestOptions,

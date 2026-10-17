@@ -463,6 +463,7 @@ export const make = Effect.fn("PluginHost.make")(function* (
     },
     skill: {
       list: () => response(skill.list()),
+      diagnostics: () => response(skill.diagnostics()),
       reload: skill.reload,
       transform: (callback) =>
         skill.transform((editor) => {
@@ -547,6 +548,10 @@ export const make = Effect.fn("PluginHost.make")(function* (
     session: {
       hook: (name, callback, options) => hooks.register("session", name, callback, options),
       list: sessions.list,
+      active: () =>
+        sessions.active.pipe(
+          Effect.map((ids) => Object.fromEntries(Array.from(ids, (id) => [id, { type: "running" as const }]))),
+        ),
       create: (input) =>
         sessions.create({
           id: input?.id,

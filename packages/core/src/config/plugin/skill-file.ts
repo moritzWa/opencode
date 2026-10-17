@@ -1,7 +1,7 @@
 export * as SkillFile from "./skill-file.js"
 
 import path from "path"
-import { Result, Schema, type SchemaIssue, SchemaParser } from "effect"
+import { Result, Schema, SchemaIssue, SchemaParser } from "effect"
 import { ConfigMarkdown } from "../markdown.js"
 import { AbsolutePath } from "../../schema.js"
 import { Skill } from "../../skill.js"
@@ -18,6 +18,24 @@ export type ParseResult =
   | { readonly _tag: "Parsed"; readonly skill: Skill.Info }
   | { readonly _tag: "Skipped"; readonly reason: "markdown" }
   | { readonly _tag: "Skipped"; readonly reason: "frontmatter"; readonly issue: SchemaIssue.Issue }
+
+export function diagnostic(filepath: string, parsed: ParseResult): Skill.Diagnostic {
+  if (parsed._tag === "Skipped")
+    return {
+      path: filepath,
+      status: "skipped",
+      reason: parsed.reason === "markdown" ? "Invalid Markdown frontmatter" : formatIssue(parsed.issue),
+    }
+  const advertised = parsed.skill.description?.trim() && parsed.skill.autoinvoke !== false
+  return {
+    path: filepath,
+    id: parsed.skill.id,
+    status: advertised ? "loaded" : "unadvertised",
+    ...(advertised ? {} : { reason: "Missing description or model invocation disabled; loadable by ID" }),
+  }
+}
+
+const formatIssue = SchemaIssue.makeFormatterDefault()
 
 const metadataBoolean = (metadata: unknown, key: string) => {
   if (metadata === undefined || metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {

@@ -435,6 +435,13 @@ export type PromptFileAttachment = {
 
 export type PromptAgentAttachment = { name: string; mention?: PromptMention }
 
+export type SkillDiagnostic = {
+  path: string
+  id?: SkillID
+  status: "loaded" | "skipped" | "unadvertised" | "shadowed"
+  reason?: string
+}
+
 export type PromptSkillAttachment = { id: SkillID; name: SkillName; text?: string; mention?: PromptMention }
 
 export type SessionMessageSkill = {
@@ -6513,6 +6520,12 @@ export type SkillListInput = {
 }
 
 export type SkillListOutput = { location: LocationPublicRef; data: Array<SkillInfo> }
+
+export type SkillDiagnosticsInput = {
+  readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
+}
+
+export type SkillDiagnosticsOutput = { location: LocationPublicRef; data: Array<SkillDiagnostic> }
 
 export type RpcCallInput = {
   readonly rpcID: { readonly rpcID: string; readonly method: string }["rpcID"]

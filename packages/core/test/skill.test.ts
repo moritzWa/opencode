@@ -32,6 +32,33 @@ const info = (id: string, description: string) =>
   })
 
 describe("Skill", () => {
+  it.effect("disposes disk refresh sources with their scope and retains later overrides on a miss", () =>
+    Effect.gen(function* () {
+      const skills = yield* Skill.Service
+      let current: Skill.Info[] = []
+      let refreshes = 0
+      yield* skills.transform((editor) => current.forEach(editor.add))
+      yield* skills.transform((editor) => editor.remove("blocked"))
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* skills.source({
+            refresh: Effect.sync(() => {
+              refreshes++
+              current = [info("created", "Created"), info("blocked", "Blocked")]
+            }),
+            diagnostics: () => [],
+          })
+          expect(yield* skills.get(Skill.ID.make("created"))).toEqual(info("created", "Created"))
+          expect(refreshes).toBe(1)
+          expect(yield* skills.get(Skill.ID.make("blocked"))).toBeUndefined()
+          expect(refreshes).toBe(2)
+        }),
+      )
+      expect(yield* skills.get(Skill.ID.make("missing"))).toBeUndefined()
+      expect(refreshes).toBe(2)
+    }),
+  )
+
   it.live("hides and refuses denied skills while organization policy overrides local allows", () =>
     Effect.gen(function* () {
       const skills = yield* Skill.Service

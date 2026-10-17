@@ -64,9 +64,7 @@ const startEntries = Effect.fnUntraced(function* (
   yield* ConfigCompatibilityPlugin.Plugin.effect(pluginHost).pipe(
     Effect.provide(Config.testLayer(entries, compatibility)),
   )
-  yield* ConfigSkillPlugin.Plugin.effect(
-    pluginHost,
-  ).pipe(
+  yield* ConfigSkillPlugin.Plugin.effect(pluginHost).pipe(
     Effect.provide(Config.testLayer(entries, compatibility)),
     Effect.provideService(SkillDiscovery.Service, discovery),
     Effect.provideService(Global.Service, Global.Service.of({ ...Global.make(), home })),
@@ -130,9 +128,9 @@ describe("SkillFile.parse", () => {
     expect(parse("disable-model-invocation: yes")).toMatchObject({ skill: { autoinvoke: false } })
     expect(parse("disable-model-invocation: false")).not.toMatchObject({ skill: { autoinvoke: expect.anything() } })
     expect(parse("disable-model-invocation: maybe")).not.toMatchObject({ skill: { autoinvoke: expect.anything() } })
-    expect(
-      parse("disable-model-invocation: true\nmetadata:\n  opencode/autoinvoke: true"),
-    ).toMatchObject({ skill: { autoinvoke: true } })
+    expect(parse("disable-model-invocation: true\nmetadata:\n  opencode/autoinvoke: true")).toMatchObject({
+      skill: { autoinvoke: true },
+    })
   })
 
   test("parses root and nested skill ids and metadata flags", () => {
@@ -175,6 +173,65 @@ metadata:
 })
 
 describe("ConfigSkillPlugin.Plugin", () => {
+  it.live("recovers created and repaired skills without watcher events and diagnoses skipped files", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const native = path.join(tmp.path, "native")
+          const claude = path.join(tmp.path, "claude")
+          const registry = yield* startEntries(
+            [new Document({ type: "document", info: decode({ skills: [native] }) })],
+            tmp.path,
+            tmp.path,
+            emptyDiscovery,
+            { claude: [AbsolutePath.make(claude)], agents: [] },
+          )
+          expect(yield* registry.get(Skill.ID.make("review"))).toBeUndefined()
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(native, "review"), { recursive: true })
+            await fs.mkdir(path.join(claude, "skills", "review"), { recursive: true })
+            await write(native, "review", "123")
+            await write(path.join(claude, "skills"), "review", "Compatibility")
+          })
+          // Invalid native frontmatter is diagnosed, while compatibility remains usable.
+          expect((yield* registry.get(Skill.ID.make("review")))?.description).toBe("Compatibility")
+          expect(yield* registry.diagnostics()).toContainEqual({
+            path: path.join(native, "review", "SKILL.md"),
+            status: "skipped",
+            reason: expect.stringContaining("description"),
+          })
+          yield* Effect.promise(async () => {
+            await write(native, "review", "Repaired")
+            await fs.mkdir(path.join(native, "manual"), { recursive: true })
+            await fs.writeFile(path.join(native, "manual", "SKILL.md"), "# Load by ID")
+            await fs.mkdir(path.join(native, ".trash", "deleted"), { recursive: true })
+            await write(path.join(native, ".trash"), "deleted", "Deleted")
+          })
+          // An absent ID rescans every producer; existing registrations retain their ordering.
+          expect(yield* registry.get(Skill.ID.make("missing"))).toBeUndefined()
+          expect((yield* registry.get(Skill.ID.make("review")))?.description).toBe("Repaired")
+          expect(yield* registry.get(Skill.ID.make("deleted"))).toBeUndefined()
+          expect(yield* registry.diagnostics()).toEqual(
+            expect.arrayContaining([
+              {
+                path: path.join(native, "manual", "SKILL.md"),
+                id: Skill.ID.make("manual"),
+                status: "unadvertised",
+                reason: expect.stringContaining("description"),
+              },
+              {
+                path: path.join(claude, "skills", "review", "SKILL.md"),
+                id: Skill.ID.make("review"),
+                status: "shadowed",
+                reason: expect.stringContaining(path.join(native, "review", "SKILL.md")),
+              },
+            ]),
+          )
+        }),
+      ),
+    ),
+  )
+
   it.live("maps config entry types to skill directories", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
       Effect.flatMap((tmp) =>

@@ -124,6 +124,7 @@ export function host(overrides: Overrides = {}): Plugin.Context {
     },
     skill: overrides.skill ?? {
       list: () => Effect.die("unused skill.list"),
+      diagnostics: () => Effect.die("unused skill.diagnostics"),
       transform: () => Effect.die("unused skill.transform"),
       reload: () => Effect.die("unused skill.reload"),
     },
@@ -168,6 +169,7 @@ export function host(overrides: Overrides = {}): Plugin.Context {
       reload: () => Effect.die("unused websearch.reload"),
     },
     session: {
+      active: overrides.session?.active ?? (() => Effect.die("unused session.active")),
       hook: overrides.session?.hook ?? (() => Effect.die("unused session.hook")),
       list: overrides.session?.list ?? (() => Effect.die("unused session.list")),
       create: overrides.session?.create ?? (() => Effect.die("unused session.create")),
@@ -236,13 +238,15 @@ export function providerHost(providers: Provider.Interface): Plugin.Context["pro
   return {
     list: () => providers.available().pipe(Effect.map(located)),
     get: (input) =>
-      providers.get(Provider.ID.make(input.providerID)).pipe(
-        Effect.flatMap((provider) =>
-          provider === undefined
-            ? Effect.fail(new Error(`Provider not found: ${input.providerID}`))
-            : Effect.succeed(located(provider)),
+      providers
+        .get(Provider.ID.make(input.providerID))
+        .pipe(
+          Effect.flatMap((provider) =>
+            provider === undefined
+              ? Effect.fail(new Error(`Provider not found: ${input.providerID}`))
+              : Effect.succeed(located(provider)),
+          ),
         ),
-      ),
     reload: providers.reload,
     transform: (callback) =>
       providers.transform((editor) =>

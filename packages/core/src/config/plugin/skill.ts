@@ -25,6 +25,8 @@ export const Plugin = define({
     const global = yield* Global.Service
     const location = yield* Location.Service
     const watcher = yield* Watcher.Service
+    const registry = yield* Skill.Service
+    const diagnostics: Skill.Diagnostic[] = []
     const loaded: { entries: Entry[]; skills: Skill.Info[] } = {
       entries: yield* config.entries(),
       skills: [],
@@ -121,11 +123,16 @@ export const Plugin = define({
           .scan("{*.md,**/SKILL.md}", { cwd: directory, absolute: true, include: "file", symlink: true, dot: true })
           .pipe(Effect.orElseSucceed(() => [] as string[]))
         for (const filepath of files.toSorted()) {
+          if (path.relative(directory, filepath).split(path.sep).includes(".trash")) continue
           const resolved = yield* fs.realPath(filepath).pipe(Effect.orElseSucceed(() => filepath))
           if (!roots.some((root) => FSUtil.contains(root, resolved))) yield* watch(path.dirname(resolved), "directory")
           const content = yield* fs.readFileStringSafe(filepath).pipe(Effect.orElseSucceed(() => undefined))
-          if (!content) continue
+          if (!content) {
+            diagnostics.push({ path: filepath, status: "skipped", reason: "Empty or unreadable skill file" })
+            continue
+          }
           const parsed = SkillFile.parse(directory, filepath, content)
+          diagnostics.push(SkillFile.diagnostic(filepath, parsed))
           if (parsed._tag === "Skipped") {
             yield* Effect.logDebug("skill file skipped", {
               filepath,
@@ -149,6 +156,7 @@ export const Plugin = define({
     const refresh = Effect.fn("ConfigSkillPlugin.refresh")(
       function* (file?: string) {
         yield* FiberMap.clear(watches)
+        diagnostics.length = 0
         const skills = new Map<Skill.ID, Skill.Info>()
         const current = sources()
         for (const source of current) {
@@ -177,6 +185,13 @@ export const Plugin = define({
     yield* refresh()
     yield* ctx.skill.transform((editor) => {
       for (const skill of loaded.skills) editor.add(skill)
+    })
+    yield* registry.source({
+      refresh: Effect.gen(function* () {
+        loaded.entries = yield* config.entries()
+        yield* refresh()
+      }),
+      diagnostics: () => diagnostics,
     })
     yield* ctx.event.subscribe().pipe(
       Stream.filter((event) => event.type === "config.updated"),

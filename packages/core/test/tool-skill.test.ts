@@ -21,6 +21,8 @@ import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { FSUtil } from "@opencode/util/fs-util"
 import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions } from "./lib/tool"
 import { registerIntegrationPolicy } from "./fixture/policy"
+import { Location } from "@opencode/core/location"
+import { location } from "./fixture/location"
 
 const skillToolNode = makeLocationNode({
   name: "test/skill-tool-plugin",
@@ -62,6 +64,12 @@ describe("SkillTool", () => {
           Config.node.replace(Config.testLayer()),
           Permission.node.replace(permissionLayer({ assert: () => Effect.die("Blocked skill reached authorization") })),
           Image.node.replace(imagePassthrough),
+          Location.node.replace(
+            Layer.succeed(
+              Location.Service,
+              Location.Service.of(location({ directory: AbsolutePath.make(process.cwd()) })),
+            ),
+          ),
         ]),
       ),
     ),
@@ -75,18 +83,18 @@ describe("SkillTool", () => {
       Effect.flatMap((tmp) =>
         Effect.gen(function* () {
           const directory = path.join(tmp.path, "effect")
-          const location = path.join(directory, "SKILL.md")
+          const filepath = path.join(directory, "SKILL.md")
           const reference = path.join(directory, "reference.md")
           yield* Effect.promise(() => fs.mkdir(directory, { recursive: true }))
           yield* Effect.promise(() =>
-            Promise.all([fs.writeFile(location, "unused"), fs.writeFile(reference, "reference")]),
+            Promise.all([fs.writeFile(filepath, "unused"), fs.writeFile(reference, "reference")]),
           )
 
           const info: Skill.Info = {
             id: Skill.ID.make("effect"),
             name: Skill.Name.make("Effect"),
             description: "Use Effect",
-            path: AbsolutePath.make(location),
+            path: AbsolutePath.make(filepath),
             content: "# Effect\n\nGuidance",
           }
           let current = [info]
@@ -111,11 +119,18 @@ describe("SkillTool", () => {
           const skills = Layer.mock(Skill.Service, {
             get: (id) => Effect.succeed(current.find((skill) => skill.id === id)),
             list: () => Effect.succeed(current),
+            diagnostics: () => Effect.succeed([]),
           })
           const skillToolLayer = AppNodeBuilder.build(LayerNode.group([Tool.node, skillToolNode]), [
             Permission.node.replace(permission),
             Skill.node.replace(skills),
             Image.node.replace(imagePassthrough),
+            Location.node.replace(
+              Layer.succeed(
+                Location.Service,
+                Location.Service.of(location({ directory: AbsolutePath.make(tmp.path) })),
+              ),
+            ),
           ])
 
           return yield* Effect.gen(function* () {

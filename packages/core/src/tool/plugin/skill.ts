@@ -4,6 +4,7 @@ import type { Context } from "@opencode/plugin/effect/plugin"
 import { ToolFailure } from "@opencode/ai"
 import { Effect, Schema } from "effect"
 import { FSUtil } from "@opencode/util/fs-util"
+import path from "path"
 import { Skill } from "../../skill.js"
 import { Permission } from "../../permission.js"
 
@@ -46,7 +47,20 @@ export const Plugin = {
           execute: (input, context) =>
             Effect.gen(function* () {
               const skill = yield* skills.get(input.id)
-              if (!skill) return yield* unableToLoad(input.id)
+              if (!skill) {
+                const issues = (yield* skills.diagnostics()).filter(
+                  (item) =>
+                    item.id === input.id ||
+                    path.basename(path.dirname(item.path)) === input.id ||
+                    path.basename(item.path, ".md") === input.id,
+                )
+                return yield* new ToolFailure({
+                  message: [
+                    `Unable to load skill ${input.id}${issues.length ? ". Rescanned disk." : ""}`,
+                    ...issues.map((item) => `${item.path}: ${item.reason ?? item.status}`),
+                  ].join("\n"),
+                })
+              }
               return yield* Effect.gen(function* () {
                 yield* permission.assert({
                   action: name,

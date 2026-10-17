@@ -15,15 +15,14 @@ export const Plugin = define({
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
     const watcher = yield* Watcher.Service
+    const registry = yield* Skill.Service
     const watches = yield* FiberMap.make<string>()
     const changes = yield* PubSub.sliding<string>(1)
     const lock = Semaphore.makeUnsafe(1)
     const skills: Skill.Info[] = []
+    const diagnostics: Skill.Diagnostic[] = []
 
-    const watch = Effect.fn("ConfigCompatibilityPlugin.watch")(function* (
-      target: string,
-      type: "file" | "directory",
-    ) {
+    const watch = Effect.fn("ConfigCompatibilityPlugin.watch")(function* (target: string, type: "file" | "directory") {
       const updates = yield* watcher.subscribe({ path: target, type })
       yield* FiberMap.run(
         watches,
@@ -36,6 +35,7 @@ export const Plugin = define({
     const refresh = Effect.fn("ConfigCompatibilityPlugin.refresh")(
       function* () {
         yield* FiberMap.clear(watches)
+        diagnostics.length = 0
         const roots = config.compatibility ? yield* config.compatibility() : { claude: [], agents: [] }
         const directories = [...roots.claude, ...roots.agents].map((root) => path.join(root, "skills"))
         const loaded = new Map<Skill.ID, Skill.Info>()
@@ -47,9 +47,14 @@ export const Plugin = define({
             .scan("{*.md,**/SKILL.md}", { cwd: resolved, absolute: true, include: "file", symlink: true, dot: true })
             .pipe(Effect.orElseSucceed(() => [] as string[]))
           for (const filepath of files.toSorted()) {
+            if (path.relative(resolved, filepath).split(path.sep).includes(".trash")) continue
             const content = yield* fs.readFileStringSafe(filepath).pipe(Effect.orElseSucceed(() => undefined))
-            if (!content) continue
+            if (!content) {
+              diagnostics.push({ path: filepath, status: "skipped", reason: "Empty or unreadable skill file" })
+              continue
+            }
             const parsed = SkillFile.parse(resolved, filepath, content)
+            diagnostics.push(SkillFile.diagnostic(filepath, parsed))
             if (parsed._tag === "Parsed") loaded.set(parsed.skill.id, parsed.skill)
           }
         }
@@ -73,5 +78,6 @@ export const Plugin = define({
     yield* ctx.skill.transform((editor) => {
       for (const skill of skills) editor.add(skill)
     })
+    yield* registry.source({ refresh: refresh(), diagnostics: () => diagnostics })
   }),
 })

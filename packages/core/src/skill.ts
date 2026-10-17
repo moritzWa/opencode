@@ -3,7 +3,7 @@ export * as Skill from "./skill.js"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import type { FSUtil } from "@opencode/util/fs-util"
 import path from "path"
-import { Context, Effect, Layer, Types } from "effect"
+import { Context, Effect, Layer, Scope, Types } from "effect"
 import { Skill } from "@opencode/schema/skill"
 import { Bus } from "./bus.js"
 import { Permission } from "./permission.js"
@@ -79,9 +79,20 @@ export type Editor = {
   remove: (id: string) => void
 }
 
+export const Diagnostic = Skill.Diagnostic
+export type Diagnostic = Skill.Diagnostic
+
+/** Disk producers keep their own discovery and refresh locks; registry transforms keep precedence. */
+export type DiskSource = {
+  readonly refresh: Effect.Effect<void>
+  readonly diagnostics: () => ReadonlyArray<Diagnostic>
+}
+
 export interface Interface extends State.Transformable<Editor> {
   readonly get: (id: ID) => Effect.Effect<Info | undefined>
   readonly list: () => Effect.Effect<Info[]>
+  readonly source: (source: DiskSource) => Effect.Effect<void, never, Scope.Scope>
+  readonly diagnostics: () => Effect.Effect<ReadonlyArray<Diagnostic>>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Skill") {}
@@ -90,6 +101,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const bus = yield* Bus.Service
+    const sources = new Set<DiskSource>()
 
     const state = State.create<Data, Editor>({
       name: "skill",
@@ -116,7 +128,28 @@ const layer = Layer.effect(
     return Service.of({
       transform: state.transform,
       reload: state.reload,
+      source: (source) =>
+        Effect.acquireRelease(
+          Effect.sync(() => sources.add(source)),
+          () => Effect.sync(() => sources.delete(source)),
+        ).pipe(Effect.asVoid),
+      diagnostics: () =>
+        Effect.sync(() =>
+          Array.from(sources).flatMap((source) =>
+            source.diagnostics().map((item) => {
+              const current = item.id && state.get().skills.get(item.id)
+              return item.status !== "skipped" && current && current.path !== item.path
+                ? { ...item, status: "shadowed" as const, reason: `Overridden by ${current.path}` }
+                : item
+            }),
+          ),
+        ),
       get: Effect.fn("Skill.get")(function* (id) {
+        const current = state.get().skills.get(id)
+        if (current || sources.size === 0) return current
+        // Watchers are advisory: a created/repaired skill must work before their next event.
+        yield* Effect.forEach(sources, (source) => source.refresh, { discard: true })
+        yield* state.reload()
         return state.get().skills.get(id)
       }),
       list: Effect.fn("Skill.list")(function* () {

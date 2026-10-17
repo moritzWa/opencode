@@ -33,6 +33,14 @@ export const Info = Schema.Struct({
   content: Schema.String,
 }).annotate({ identifier: "Skill.Info" })
 
+export interface Diagnostic extends Schema.Schema.Type<typeof Diagnostic> {}
+export const Diagnostic = Schema.Struct({
+  path: Schema.String,
+  id: ID.pipe(optional),
+  status: Schema.Literals(["loaded", "skipped", "unadvertised", "shadowed"]),
+  reason: Schema.String.pipe(optional),
+}).annotate({ identifier: "Skill.Diagnostic" })
+
 const Updated = ephemeral({ type: "skill.updated", schema: {} })
 export const Event = { Updated, Definitions: inventory(Updated) }
 
