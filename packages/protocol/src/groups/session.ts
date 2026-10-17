@@ -658,6 +658,24 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S, FormI ext
         ),
     )
     .add(
+      HttpApiEndpoint.post("session.generateObject", "/api/session/:sessionID/generate-object", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ prompt: Schema.String, schema: Schema.Record(Schema.String, Schema.Json) }),
+        success: Schema.Struct({
+          data: Schema.Struct({ object: Schema.Json }),
+        }).annotate({ identifier: "SessionGenerateObjectResponse" }),
+        error: [SessionNotFoundError, ServiceUnavailableError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.generateObject",
+            summary: "Generate structured output from session context",
+            description: "Generate transient schema-validated output without mutating session history.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.get("session.log", "/api/experimental/session/:sessionID/log", {
         params: { sessionID: Session.ID },
         query: {

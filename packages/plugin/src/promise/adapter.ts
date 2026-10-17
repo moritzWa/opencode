@@ -267,7 +267,7 @@ export function fromPromise(plugin: Plugin) {
           method: (input: never) => Effect.Effect<unknown, unknown>,
         ) => {
           const compiled = compileEndpoint(endpoint)
-          return ((input?: unknown) =>
+          return ((input?: unknown, options?: { readonly signal?: AbortSignal }) =>
             Effect.gen(function* () {
               // Match the generated Promise client, whose request body crosses JSON before endpoint decoding.
               const normalized = yield* Schema.encodeUnknownEffect(JsonInput)(input ?? {}).pipe(
@@ -277,7 +277,15 @@ export function fromPromise(plugin: Plugin) {
               const result = yield* method(Object.assign({}, ...decoded) as never)
               if (compiled.noContent) return undefined
               return yield* compiled.encode(result)
-            }).pipe(Effect.runPromiseWith(runtime))) as PromiseMethod
+            }).pipe((effect) =>
+              Effect.runPromiseWith(runtime)(effect, {
+                signal:
+                  options?.signal ??
+                  (compiled.decode.length === 0
+                    ? (input as { readonly signal?: AbortSignal } | undefined)?.signal
+                    : undefined),
+              }),
+            )) as PromiseMethod
         }
 
         const transform =
@@ -603,6 +611,7 @@ export function fromPromise(plugin: Plugin) {
             switchModel: adaptApiMethod(SessionEndpoints["session.switchModel"], host.session.switchModel),
             prompt: adaptApiMethod(SessionEndpoints["session.prompt"], host.session.prompt),
             generate: adaptApiMethod(SessionEndpoints["session.generate"], host.session.generate),
+            generateObject: adaptApiMethod(SessionEndpoints["session.generateObject"], host.session.generateObject),
             command: adaptApiMethod(SessionEndpoints["session.command"], host.session.command),
             compact: adaptApiMethod(SessionEndpoints["session.compact"], host.session.compact),
             synthetic: adaptApiMethod(SessionEndpoints["session.synthetic"], host.session.synthetic),

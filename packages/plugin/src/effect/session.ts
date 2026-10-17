@@ -178,6 +178,7 @@ export type SessionDomain = Pick<
   | "switchModel"
   | "prompt"
   | "generate"
+  | "generateObject"
   | "command"
   | "compact"
   | "synthetic"

@@ -123,13 +123,14 @@ export interface GenerateObjectDynamicOptions<SelectedLanguageModel extends Lang
 const runGenerateObject = Effect.fn("LLM.generateObject")(function* (
   options: GenerateObjectBase,
   tool: ReturnType<typeof makeTool>,
+  streamOptions?: StreamOptions,
 ) {
   const baseRequest = request(options)
   const generateRequest = LLMRequest.update(baseRequest, {
     tools: toDefinitions({ [GENERATE_OBJECT_TOOL_NAME]: tool }),
     toolChoice: ToolChoice.named(GENERATE_OBJECT_TOOL_NAME),
   })
-  const response = yield* LLMClient.generate(generateRequest)
+  const response = yield* LLMClient.generate(generateRequest, streamOptions)
   const call = response.toolCalls.find(
     (event) => LLMEvent.is.toolCall(event) && event.name === GENERATE_OBJECT_TOOL_NAME,
   )
@@ -167,11 +168,16 @@ const runGenerateObject = Effect.fn("LLM.generateObject")(function* (
  */
 export function generateObject<const SelectedLanguageModel extends LanguageModel, S extends ToolSchema<any>>(
   options: GenerateObjectOptions<S, SelectedLanguageModel>,
+  streamOptions?: StreamOptions,
 ): Effect.Effect<GenerateObjectResponse<Schema.Schema.Type<S>>, AIError, Service>
 export function generateObject<const SelectedLanguageModel extends LanguageModel>(
   options: GenerateObjectDynamicOptions<SelectedLanguageModel>,
+  streamOptions?: StreamOptions,
 ): Effect.Effect<GenerateObjectResponse<unknown>, AIError, Service>
-export function generateObject(options: GenerateObjectOptions<ToolSchema<any>> | GenerateObjectDynamicOptions) {
+export function generateObject(
+  options: GenerateObjectOptions<ToolSchema<any>> | GenerateObjectDynamicOptions,
+  streamOptions?: StreamOptions,
+) {
   if ("schema" in options) {
     const { schema, ...rest } = options
     return runGenerateObject(
@@ -182,6 +188,7 @@ export function generateObject(options: GenerateObjectOptions<ToolSchema<any>> |
         success: Schema.Unknown as ToolSchema<unknown>,
         execute: () => Effect.void,
       }),
+      streamOptions,
     )
   }
   const { jsonSchema, ...rest } = options
@@ -192,5 +199,6 @@ export function generateObject(options: GenerateObjectOptions<ToolSchema<any>> |
       jsonSchema,
       execute: () => Effect.void,
     }),
+    streamOptions,
   )
 }

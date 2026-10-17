@@ -1,3 +1,5 @@
+export * as ToolRuntime from "./runtime.js"
+
 import type { ToolDefinition } from "@opencode/ai"
 import { emptyInputJsonSchema } from "@opencode/ai/tool"
 import { Tool } from "@opencode/schema/tool"
@@ -99,7 +101,7 @@ const formatInputIssues = (tool: string, issues: ReadonlyArray<StandardSchemaV1.
   return `Invalid arguments for tool "${tool}":\n${details.join("\n")}\n\nArguments provided:\n${JSON.stringify(value, null, 2)}\n\nUpdate the arguments and call the tool again.`
 }
 
-const jsonSchema = (schema: JsonSchema.JsonSchema) => {
+export const jsonSchema = (schema: JsonSchema.JsonSchema) => {
   const draft =
     (typeof schema.$schema === "string" && schema.$schema.includes("draft-07")) || "definitions" in schema
       ? JsonSchema.fromSchemaDraft07(schema)

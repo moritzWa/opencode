@@ -434,6 +434,16 @@ export type SessionGenerateOperation<E = never> = (
   input: SessionGenerateInput,
 ) => Effect.Effect<SessionGenerateOutput, E>
 
+export type SessionGenerateObjectInput = {
+  readonly sessionID: Session.ID
+  readonly prompt: string
+  readonly schema: { readonly [x: string]: Schema.Json }
+}
+export type SessionGenerateObjectOutput = { readonly object: Schema.Json }
+export type SessionGenerateObjectOperation<E = never> = (
+  input: SessionGenerateObjectInput,
+) => Effect.Effect<SessionGenerateObjectOutput, E>
+
 export type SessionLogInput = {
   readonly sessionID: Session.ID
   readonly after?: Event.Seq | undefined
@@ -1364,6 +1374,7 @@ export interface SessionApi<E = never> {
     }
   }
   readonly generate: SessionGenerateOperation<E>
+  readonly generateObject: SessionGenerateObjectOperation<E>
   readonly log: SessionLogOperation<E>
   readonly interrupt: SessionInterruptOperation<E>
   readonly background: SessionBackgroundOperation<E>

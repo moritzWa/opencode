@@ -67,6 +67,7 @@ describe("LLM.generateObject", () => {
   it.effect("forces a synthetic tool call and decodes the input", () =>
     Effect.gen(function* () {
       const bodies: OpenAIChatBody[] = []
+      let intercepted = 0
       const layer = dynamicResponse((input) =>
         Effect.sync(() => {
           bodies.push(decodeBody(input.text))
@@ -80,15 +81,24 @@ describe("LLM.generateObject", () => {
         }),
       )
 
-      const response = yield* LLM.generateObject({
-        model,
-        prompt: "Return a structured weather report.",
-        schema: Schema.Struct({ city: Schema.String, temp: Schema.Number }),
-      }).pipe(Effect.provide(layer))
+      const response = yield* LLM.generateObject(
+        {
+          model,
+          prompt: "Return a structured weather report.",
+          schema: Schema.Struct({ city: Schema.String, temp: Schema.Number }),
+        },
+        {
+          http: (request, handler) =>
+            Effect.sync(() => {
+              intercepted++
+            }).pipe(Effect.andThen(handler(request))),
+        },
+      ).pipe(Effect.provide(layer))
 
       expect(response.object).toEqual({ city: "Paris", temp: 22 })
       expect(response.response.toolCalls).toHaveLength(1)
       expect(bodies).toHaveLength(1)
+      expect(intercepted).toBe(1)
       expect(bodies[0].tool_choice).toEqual({ type: "function", function: { name: "generate_object" } })
       const tool = bodies[0].tools?.[0]
       expect(bodies[0].tools).toHaveLength(1)

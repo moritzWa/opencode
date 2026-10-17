@@ -87,6 +87,8 @@ import type {
   SessionInstructionsEntryRemoveOutput,
   SessionGenerateInput,
   SessionGenerateOutput,
+  SessionGenerateObjectInput,
+  SessionGenerateObjectOutput,
   SessionLogInput,
   SessionLogOutput,
   SessionInterruptInput,
@@ -698,6 +700,17 @@ const EndpointSessionGenerate = (raw: RawClient["server.session"]) => (input: Se
     ),
   )
 
+const EndpointSessionGenerateObject = (raw: RawClient["server.session"]) => (input: SessionGenerateObjectInput) =>
+  preserveEffect<SessionGenerateObjectOutput>()(
+    raw["session.generateObject"]({
+      params: { sessionID: input["sessionID"] },
+      payload: { prompt: input["prompt"], schema: input["schema"] },
+    }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
 const EndpointSessionLog = (raw: RawClient["server.session"]) => (input: SessionLogInput) =>
   preserveStream<SessionLogOutput>()(
     Stream.unwrap(
@@ -831,6 +844,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
     },
   },
   generate: EndpointSessionGenerate(raw),
+  generateObject: EndpointSessionGenerateObject(raw),
   log: EndpointSessionLog(raw),
   interrupt: EndpointSessionInterrupt(raw),
   background: EndpointSessionBackground(raw),

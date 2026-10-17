@@ -30,6 +30,25 @@ Branch: `v2-core`. No live installation, server restart, or release belongs to t
 | Claude hooks on real shell/MCP leaf calls | Ported and verified seam                                                         | Shell creation carries originating `sessionID`; tool before/after hooks carry `cwd`. Code Mode leaf calls pass normalized tool identity and real input through the same hooks. Real shell tests verify injected session identity; MCP and edit/write/patch tests verify actual leaf input, output and cwd.                                                                                                         |
 | Durable auth fallback                     | Auth core seam integrated from `c1856affb3` as `be4e5fe5f8`                      | Recovery runs inside the active serialized drain, using stable user-message identity and an atomic model-selection plus recovery marker. Five real HTTP tests cover once-only recovery, preserved production WriteTool output, interruption, concurrent sessions and a persisted-database runtime restart. Auth plugin policy remains owned by the auth stream.                                                    |
 
+## Structured memory-selector generation
+
+The V1 memory selector's `format: json_schema` requires native structured output. Asking for JSON in prose is not equivalent.
+
+- HTTP: `POST /api/session/:sessionID/generate-object` with `{prompt, schema}` returns `{data: {object}}`.
+- Public Promise plugin API: `ctx.session.generateObject({sessionID, prompt, schema}, requestOptions?)` resolves to **`{object}`**. The generated client and in-process adapter unwrap the wire `data` field once.
+- The method uses the supplied fork's configured agent, model, system instructions and history. It runs the `context` hook followed by the `generate` hook, plus normal model/HTTP request hooks. Ordinary text generation keeps its existing behavior.
+- Native `LLM.generateObject` forces the synthetic `generate_object` tool. No Session tools execute. Raw JSON Schema is compiled through the same Effect codec used by tool-input validation; output is decoded with excess-property errors enabled. Missing output calls, malformed JSON, missing required fields, invalid values and forbidden extra fields are rejected.
+- Generation does not admit a prompt, alter history, or mutate the parent/fork. The real HTTP/provider test compares durable tables and context before and after each call.
+- Promise in-process API cancellation forwards `requestOptions.signal`, including first-argument options on no-input methods. A real SDK plugin activation test proves the public call unwraps to `{object}`, cancellation rejects the Promise and closes the provider read, activity reaches zero before fork removal, and parent context remains unchanged.
+
+Structured followup checks:
+
+- Real HTTP/provider schema, hook, fork-isolation and mutation regressions: **10 passes, 1,610 assertions**.
+- Actual Promise plugin/supervisor/host cancellation regression: **10 passes, 100 assertions**.
+- Existing Core generation and tool-schema regressions: 37 passed.
+- AI object-generation regressions, including HTTP middleware forwarding: 6 passed.
+- AI, Core, Plugin, Server and Client typechecks passed; clients regenerated.
+
 ## Verification
 
 All tests, generation and typechecks use `python3 ~/.claude/scripts/heavy-job.py --wait --` from the package directory. Long checks run under bounded monitors. Dependencies were installed with the frozen lockfile in this worktree.

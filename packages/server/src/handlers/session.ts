@@ -585,6 +585,21 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.generateObject",
+        Effect.fn(function* (ctx) {
+          const object = yield* session
+            .generateObject({ sessionID: ctx.params.sessionID, ...ctx.payload })
+            .pipe(
+              Effect.mapError((error) =>
+                error._tag === "Session.NotFoundError"
+                  ? missingSession(error)
+                  : new ServiceUnavailableError({ message: error.message, service: "session generation" }),
+              ),
+            )
+          return { data: { object } }
+        }),
+      )
+      .handle(
         "session.log",
         Effect.fn(function* (ctx) {
           yield* session.get(ctx.params.sessionID).pipe(Effect.catchTag("Session.NotFoundError", missingSession))

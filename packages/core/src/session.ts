@@ -2,6 +2,7 @@ export * as Session from "./session.js"
 export * from "./session/schema.js"
 
 import { DateTime, Effect, Layer, Schema, Context, Stream } from "effect"
+import type { JsonSchema } from "effect"
 import { LLMClient } from "@opencode/ai"
 import { ListAnchor, ListCursor, ListFilter } from "@opencode/schema/session"
 import { and, desc, eq } from "drizzle-orm"
@@ -201,6 +202,12 @@ export interface Interface {
     sessionID: SessionSchema.ID
     prompt: string
   }) => Effect.Effect<string, NotFoundError | SessionGenerate.Error>
+  /** Generates schema-validated JSON without executing Session tools or mutating history. */
+  readonly generateObject: (input: {
+    sessionID: SessionSchema.ID
+    prompt: string
+    schema: JsonSchema.JsonSchema
+  }) => Effect.Effect<Schema.Json, NotFoundError | SessionGenerate.Error>
   readonly command: (input: {
     sessionID: SessionSchema.ID
     command: string
@@ -451,6 +458,14 @@ const layer = Layer.effect(
       generate: Effect.fn("Session.generate")(function* (input) {
         const session = yield* result.get(input.sessionID)
         return yield* SessionGenerate.generate({ session, prompt: input.prompt }).pipe(
+          Effect.provideService(Instance.Service, instances),
+          Effect.provideService(Database.Service, database),
+          Effect.provideService(LLMClient.Service, llm),
+        )
+      }),
+      generateObject: Effect.fn("Session.generateObject")(function* (input) {
+        const session = yield* result.get(input.sessionID)
+        return yield* SessionGenerate.generateObject({ session, prompt: input.prompt, schema: input.schema }).pipe(
           Effect.provideService(Instance.Service, instances),
           Effect.provideService(Database.Service, database),
           Effect.provideService(LLMClient.Service, llm),

@@ -81,6 +81,8 @@ import type {
   SessionInstructionsEntryRemoveOutput,
   SessionGenerateInput,
   SessionGenerateOutput,
+  SessionGenerateObjectInput,
+  SessionGenerateObjectOutput,
   SessionLogInput,
   SessionLogOutput,
   SessionInterruptInput,
@@ -979,6 +981,18 @@ export function make(options: ClientOptions) {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/generate`,
             body: { prompt: input["prompt"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401, 404, 503],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      generateObject: (input: SessionGenerateObjectInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionGenerateObjectOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/generate-object`,
+            body: { prompt: input["prompt"], schema: input["schema"] },
             successStatus: 200,
             declaredStatuses: [400, 401, 404, 503],
             empty: false,

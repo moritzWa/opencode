@@ -128,6 +128,8 @@ export type InstructionEntryKey = string
 
 export type SessionGenerateResponse = { data: { text: string } }
 
+export type SessionGenerateObjectResponse = { data: { object: JsonValue } }
+
 export type EventID = string
 
 export type EventSeq = number
@@ -4802,6 +4804,14 @@ export type SessionGenerateInput = {
 }
 
 export type SessionGenerateOutput = SessionGenerateResponse["data"]
+
+export type SessionGenerateObjectInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly prompt: { readonly prompt: string; readonly schema: { readonly [x: string]: JsonValue } }["prompt"]
+  readonly schema: { readonly prompt: string; readonly schema: { readonly [x: string]: JsonValue } }["schema"]
+}
+
+export type SessionGenerateObjectOutput = SessionGenerateObjectResponse["data"]
 
 export type SessionLogInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]

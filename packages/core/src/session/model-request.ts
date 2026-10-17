@@ -222,6 +222,7 @@ export interface Interface {
   readonly primary: (input: Input) => Effect.Effect<Prepared<SessionContext>>
   readonly compaction: (input: Input) => Effect.Effect<Prepared<SessionCompaction>>
   readonly generate: (input: Input) => Effect.Effect<Prepared<SessionGenerate>>
+  readonly generateObject: (input: Input) => Effect.Effect<Prepared<SessionGenerate>>
   readonly title: (input: Input) => Effect.Effect<Prepared<SessionTitle>>
 }
 
@@ -427,6 +428,12 @@ export const layer = Layer.effect(
       primary: (input) => prepare("primary", input, agentHook("context", input.agent)),
       compaction: (input) => prepare("compaction", input, agentHook("compaction", input.agent)),
       generate: (input) => prepare("generate", input, agentHook("generate", input.agent)),
+      generateObject: (input) =>
+        prepare("generate", input, (draft, tools) =>
+          agentHook("context", input.agent)(draft, tools).pipe(
+            Effect.flatMap((event) => hooks.trigger("session", "generate", event)),
+          ),
+        ),
       title: (input) => prepare("title", input, (draft) => hooks.trigger("session", "title", draft)),
     })
   }),
