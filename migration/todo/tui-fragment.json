@@ -1,0 +1,3 @@
+{
+  "plugins": ["./migration/todo"]
+}

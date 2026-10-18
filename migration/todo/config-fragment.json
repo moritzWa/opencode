@@ -1,0 +1,3 @@
+{
+  "plugins": [{ "package": "./migration/todo", "options": { "todoread": true } }]
+}

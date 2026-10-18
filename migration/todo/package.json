@@ -1,0 +1,52 @@
+{
+  "name": "@moritz/opencode-todo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./server": "./server.js",
+    "./tui": "./tui.js",
+    "./rpc": "./rpc.js"
+  },
+  "files": [
+    "server.js",
+    "store.js",
+    "rpc.js",
+    "tui.js",
+    "PARITY.md",
+    "config-fragment.json",
+    "tui-fragment.json"
+  ],
+  "scripts": {
+    "build": "bun build.ts",
+    "test": "bun test --timeout 30000 test",
+    "verify": "bun run build && bun run test",
+    "pack": "bun pack.ts"
+  },
+  "peerDependencies": {
+    "@opencode/plugin": "*",
+    "@opentui/core": "*",
+    "@opentui/solid": "*",
+    "solid-js": "*"
+  },
+  "peerDependenciesMeta": {
+    "@opencode/plugin": {
+      "optional": true
+    },
+    "@opentui/core": {
+      "optional": true
+    },
+    "@opentui/solid": {
+      "optional": true
+    },
+    "solid-js": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@opentui/core": "0.5.17",
+    "@opentui/solid": "0.5.17",
+    "solid-js": "1.9.15",
+    "effect": "4.0.1"
+  }
+}
