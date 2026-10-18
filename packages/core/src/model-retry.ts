@@ -45,6 +45,11 @@ const decodeNetworkCause = Schema.decodeUnknownOption(
     cause: Schema.optionalKey(Schema.Unknown),
   }),
 )
+// A local proxy cannot drop its client connection to mirror an unreachable upstream, so it
+// answers with an error body that carries the upstream's native network code instead.
+const decodeProxyNetworkFailure = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ error: Schema.Struct({ code: Schema.String }) })),
+)
 const networkCodes = new Set([
   "ECONNABORTED",
   "ECONNREFUSED",
@@ -97,7 +102,11 @@ export const policy = Effect.gen(function* () {
           input.cause.reason.code !== undefined &&
           networkCodes.has(input.cause.reason.code)) ||
         ((input.cause.reason._tag === "Transport" || input.cause.reason._tag === "UnknownProvider") &&
-          isWrappedNetworkFailure(input.cause.reason.cause))
+          isWrappedNetworkFailure(input.cause.reason.cause)) ||
+        (input.cause.reason._tag === "ProviderInternal" &&
+          Option.exists(decodeProxyNetworkFailure(input.cause.reason.body), (body) =>
+            networkCodes.has(body.error.code),
+          ))
       const advance = disconnected && !timeout ? network : step
       const next = yield* advance(now, input).pipe(Pull.catchDone(() => Effect.succeed(undefined)))
       if (!next) return undefined

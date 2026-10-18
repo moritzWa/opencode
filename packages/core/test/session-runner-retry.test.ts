@@ -70,4 +70,16 @@ describe("SessionRunnerRetry.policy", () => {
       expect(yield* decisions(wrapped, 12)).toEqual(Array(12).fill(true))
     }),
   )
+
+  it.effect("waits out network outages a local proxy reports with the upstream's code", () =>
+    Effect.gen(function* () {
+      const proxied = new AIError({
+        reason: new ProviderInternalError({
+          message: "Claude subscription upstream_network: ENOTFOUND",
+          body: JSON.stringify({ type: "error", error: { type: "subscription.upstream_network", code: "ENOTFOUND" } }),
+        }),
+      })
+      expect(yield* decisions(proxied, 12)).toEqual(Array(12).fill(true))
+    }),
+  )
 })

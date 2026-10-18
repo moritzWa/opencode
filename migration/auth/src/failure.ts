@@ -1,4 +1,4 @@
-export type Category = "refresh_throttle" | "refresh_network" | "refresh_server" | "refresh_revoked" | "refresh_invalid" | "refresh_pending" | "credential_store" | "model_quota" | "model_throttle" | "capacity" | "unknown"
+export type Category = "refresh_throttle" | "refresh_network" | "refresh_server" | "refresh_revoked" | "refresh_invalid" | "refresh_pending" | "credential_store" | "model_quota" | "model_throttle" | "capacity" | "upstream_network" | "unknown"
 
 export interface Failure {
   category: Category
@@ -7,6 +7,7 @@ export interface Failure {
   retryAfterMs?: number
   exhausted?: boolean
   quotaWindow?: "5h" | "7d" | "7d_opus"
+  code?: string
 }
 
 export class ClaudeFailure extends Error {
@@ -46,7 +47,7 @@ export async function classify(response: Response, phase: "refresh" | "model"): 
 export function failureResponse(detail: Failure) {
   // Network failures have no upstream HTTP status. 503 describes this local gateway,
   // while the structured evidence deliberately leaves upstream status absent.
-  return Response.json({ type: "error", error: { type: `subscription.${detail.category}`, message: `Claude subscription ${detail.category}: ${detail.reason}` }, subscription: detail }, { status: detail.status && detail.status >= 400 ? detail.status : 503 })
+  return Response.json({ type: "error", error: { type: `subscription.${detail.category}`, ...(detail.code ? { code: detail.code } : {}), message: `Claude subscription ${detail.category}: ${detail.reason}` }, subscription: detail }, { status: detail.status && detail.status >= 400 ? detail.status : 503 })
 }
 
 export function readFailure(error: { type?: string; message?: string; response?: { body: string } }): Failure | undefined {
@@ -58,7 +59,7 @@ export function readFailure(error: { type?: string; message?: string; response?:
   }
   const detail = parsed.subscription
   if (!detail || typeof detail !== "object" || !("category" in detail) || !("reason" in detail)) return
-  const categories: Category[] = ["refresh_throttle", "refresh_network", "refresh_server", "refresh_revoked", "refresh_invalid", "refresh_pending", "credential_store", "model_quota", "model_throttle", "capacity", "unknown"]
+  const categories: Category[] = ["refresh_throttle", "refresh_network", "refresh_server", "refresh_revoked", "refresh_invalid", "refresh_pending", "credential_store", "model_quota", "model_throttle", "capacity", "upstream_network", "unknown"]
   const category = categories.find((item) => item === detail.category)
   if (!category || typeof detail.reason !== "string") return
   const status = "status" in detail && typeof detail.status === "number" && Number.isInteger(detail.status) && detail.status >= 100 && detail.status <= 599 ? detail.status : undefined

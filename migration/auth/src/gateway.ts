@@ -80,11 +80,20 @@ export function gateway(options: {
       // Never send unknown Error.message: a transport can put an authenticated
       // URL or credential blob there. Cancellation cannot trigger recovery.
       if (error instanceof DOMException && error.name === "AbortError") return new Response(null, { status: 499 })
+      // Fetch rejects with the native code when api.anthropic.com is unreachable. Forwarding
+      // the code lets the runner wait out the outage like a direct provider connection.
+      const code = "code" in error && typeof error.code === "string" ? error.code : undefined
+      if (code && networkCodes.has(code)) {
+        options.diagnostics?.record({ category: "upstream_network", reason: "connection_failed" }, "retry_claude")
+        return failureResponse({ category: "upstream_network", reason: "connection_failed", code })
+      }
       return failureResponse({ category: "unknown", reason: "gateway_failure" })
     },
   })
   return { url: `http://127.0.0.1:${server.port}/v1`, secret, stop: () => server.stop(true) }
 }
+
+const networkCodes = new Set(["ECONNREFUSED", "ECONNRESET", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETDOWN", "ENETUNREACH", "ETIMEDOUT", "EPIPE", "ConnectionClosed", "ConnectionRefused", "ConnectionResetByPeer", "ConnectionTimeout", "FailedToOpenSocket"])
 
 function forward(response: Response) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: forwardedHeaders(response.headers) })

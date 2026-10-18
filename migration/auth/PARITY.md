@@ -245,3 +245,17 @@ Packed regression installs and compiled servers exist only in disposable test ro
 
 The manager owns integrating the companion core commit, the final config fragment,
 dependency placement for the isolated target, and full migrated-runtime checks.
+
+## Network outages (0.1.3)
+
+On 2026-10-18 a DNS outage made the gateway's upstream fetch reject with
+`ENOTFOUND`. The gateway answered 503 `unknown: gateway_failure`, so the runner
+saw a provider error and stopped after its ten short retries (about 80 seconds)
+instead of the six-hour network allowance a direct connection gets.
+
+The gateway cannot drop its client connection to mirror the failure, so it now
+answers 503 `upstream_network` with the native code in `error.code`. Core
+`ModelRetry` treats a provider error whose body carries a native network code as
+a network outage. The category never triggers fallback: switching to Sol while
+offline would fail the same way and leave the Session on another model.
+`test/network.test.ts` covers the gateway side.
