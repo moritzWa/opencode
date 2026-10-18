@@ -116,6 +116,11 @@ class Settings:
         profile = json.loads((self.profile / "profile.json").read_text())
         for key in profile["environment"]:
             env.pop(key, None)
+        # Installer mode is one-shot; a recovered server must not select V1
+        # again when its environment is later used for a V2 installation.
+        for key in list(env):
+            if key.startswith("INSTALL_LATEST_"):
+                env.pop(key)
         for key in ("AGENTVIEW_OPENCODE_API", "AGENTVIEW_OPENCODE_SERVICE_FILE", "OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD"):
             env.pop(key, None)
         env.update(HOME=str(self.home), XDG_CONFIG_HOME=str(self.home / ".config"),
@@ -922,6 +927,7 @@ class Controller:
                     shutil.copy2(backup / "opencode-owned.json", ownership)
                 else:
                     ownership.unlink(missing_ok=True)
+                env = self.s.global_env()
                 env.update(OPENCODE_SERVER_USERNAME=original["username"], OPENCODE_SERVER_PASSWORD=original["password"], OPENCODE_CONFIG_DIR=str(self.s.home / ".config/opencode"), OPENCODE_DB=str(self.s.original))
                 pid = self.h.start([self.s.logical, "serve", "--hostname", "127.0.0.1", "--port", str(original["port"])], env, self.s.home, self.log("rollback-service"))
                 resources["rollbackPID"]=pid

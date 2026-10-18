@@ -273,6 +273,7 @@ class FakeHost(Host):
         else: raise AssertionError("Unexpected live command boundary: " + tag)
 
     def start(self, argv, env, cwd, log):
+        assert not any(key.startswith("INSTALL_LATEST_") for key in env)
         self.starts.append([str(x) for x in argv])
         if "--service" in argv:
             port = int(argv[-1]); self.add_identity(400, str(self.s.profile / "bin/native/opencode-dev"))
@@ -289,6 +290,16 @@ import fcntl
 
 
 class CutoverTests(unittest.TestCase):
+    def test_inherited_rollback_flags_cannot_contaminate_runtime_environment(self):
+        script = ("from pathlib import Path; import sys; from controller import Settings; "
+                  "s=Settings(*(Path(value) for value in sys.argv[1:])); "
+                  "env=s.global_env(); assert not any(key.startswith('INSTALL_LATEST_') for key in env)")
+        result = subprocess.run([sys.executable, "-c", script, *map(str, (self.s.home, self.s.repo, self.s.profile,
+                                self.s.global_state, self.s.approvals, self.s.ready))],
+                                cwd=Path(__file__).parent, capture_output=True, text=True, timeout=10,
+                                env={**os.environ, "INSTALL_LATEST_OPENCODE_V1": "1", "INSTALL_LATEST_OPENCODE_ROLLBACK": "/fixture/rollback", "INSTALL_LATEST_OPENCODE_V2_REF": "stale-ref"})
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="cutover-unit-")
         self.addCleanup(self.temp.cleanup)
