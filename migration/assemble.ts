@@ -100,7 +100,7 @@ const wrappers = {
   auth: { file: "server.ts", content: 'export { default } from "@local/opencode-subscription-auth"\n' },
   "parity-server": { file: "server.ts", content: 'export { default } from "@moritz/opencode-parity-plugins/server-only"\n' },
   "parity-ui": { file: "tui.js", content: 'export { default } from "@moritz/opencode-parity-plugins/tui"\n' },
-  speech: { file: "tui.js", content: 'export { default } from "opencode-read-aloud/tui"\n' },
+  speech: { file: "tui.js", content: 'export { default } from "opencode-read-aloud/v2"\n' },
   "todo-server": { file: "server.ts", content: 'export { default } from "@moritz/opencode-todo/server"\n' },
   "todo-ui": { file: "tui.js", content: 'export { default } from "@moritz/opencode-todo/tui"\n' },
   policy: { file: "server.ts", content: await Bun.file(path.join(import.meta.dir, "model-policy.ts")).text() },
