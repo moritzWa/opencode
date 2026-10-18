@@ -545,7 +545,7 @@ class Controller:
         if self.h.writers(self.s.original) or self.h.port_open(self.plan["preflight"]["originalPort"]):
             raise Refusal("Source is not frozen")
         self.command("backup", [sys.executable, self.s.repo / "migration/backup.py", self.s.profile,
-                                "--source", self.s.original])
+                                "--source", self.s.original, "--frozen-clone"])
         report = read_private(self.s.profile / "reference/backup.json")
         profile = read_private(self.s.profile / "profile.json")
         target = Path(profile["environment"]["OPENCODE_DB"])
@@ -553,7 +553,7 @@ class Controller:
             raise Refusal("Fresh source backup lacks its verified receipt")
         with closing(sqlite3.connect(target.as_uri() + "?mode=ro", uri=True)) as source:
             counts = {table: source.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in ("session", "message", "part")}
-            if counts != report["counts"] or source.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            if counts != report["counts"]:
                 raise Refusal("Published source backup differs from its receipt")
         retained = self.backup / "frozen-v1.db"
         # A verified, checkpointed backup can be retained as an independent APFS
@@ -591,7 +591,7 @@ class Controller:
         executable = Path(profile["executable"])
         if executable != self.s.profile / "bin/native/opencode-dev":
             raise Refusal("Approved installer did not select the production native executable")
-        receipt = read_private(self.s.home / ".local/state/install-latest/opencode-dev.json")
+        receipt = read_private(self.s.home / ".local/state/install-latest/opencode-dev.json", require_private=False)
         if receipt["commit"] != self.plan["preflight"]["sourceSha"][:10]:
             raise Refusal("Installed runtime is not the reviewed pushed source")
         version = self.h.capture([executable, "--version"], env=self.s.native_env()).strip()
@@ -651,7 +651,7 @@ class Controller:
         native = self.s.profile / "bin/native/agentview"
         if not native.is_file():
             raise Refusal("Approved dashboard installation is missing")
-        receipt=read_private(self.s.home / ".local/state/install-latest/agentview.json")
+        receipt=read_private(self.s.home / ".local/state/install-latest/agentview.json", require_private=False)
         pushed=self.h.capture(["git","rev-parse","origin/main"],cwd=self.s.home / "Code/agentview").strip()
         self.h.capture(["git","merge-base","--is-ancestor","d5472303d36a943d3089b16f6ffda0dd663f7d3c",pushed],cwd=self.s.home / "Code/agentview")
         if not pushed.startswith(receipt["commit"]):

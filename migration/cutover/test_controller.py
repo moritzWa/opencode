@@ -220,7 +220,7 @@ class FakeHost(Host):
         if tag == "backup":
             # Exercise the real bounded helper on the isolated fake source.
             helper = Path(__file__).parents[1] / "backup.py"
-            result=subprocess.run([sys.executable, str(helper), str(s.profile), "--source", str(s.original)],
+            result=subprocess.run([sys.executable, str(helper), str(s.profile), "--source", str(s.original), *(["--frozen-clone"] if sys.platform == "darwin" else [])],
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=10)
             if result.returncode: raise AssertionError(result.stderr.decode())
         elif tag == "retain-frozen":
@@ -249,10 +249,12 @@ class FakeHost(Host):
             selected = s.home / ".local/state/install-latest/opencode-v2-ref"
             selected.parent.mkdir(parents=True, exist_ok=True); selected.write_text(s.source_ref)
             private_json(selected.parent / "opencode-dev.json", {"commit": self.source_sha[:10]})
+            (selected.parent / "opencode-dev.json").chmod(0o644)
         elif tag == "install-agentview":
             assert env["XDG_STATE_HOME"] == str(s.global_state)
             (s.profile / "bin/native/agentview").write_bytes(b"FAKE-AV-V2")
             private_json(s.home / ".local/state/install-latest/agentview.json",{"commit":self.source_sha[:7]})
+            (s.home / ".local/state/install-latest/agentview.json").chmod(0o644)
         elif tag == "handoff-import":
             # The actual phase must release its old lock before invoking CLI.
             fd = os.open(s.state / "server.lock", os.O_RDWR)
@@ -574,6 +576,32 @@ class CutoverTests(unittest.TestCase):
 
 
 class EntrySafetyTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "darwin", "APFS frozen source clone")
+    def test_frozen_backup_preserves_uncheckpointed_wal_and_original(self):
+        with tempfile.TemporaryDirectory(prefix="frozen-wal-") as directory:
+            root = Path(directory)
+            source = root / "source.db"
+            (root / "reference").mkdir()
+            (root / "bin").mkdir()
+            private_json(root / "profile.json", {"environment": {}, "executable": "/bin/false"})
+            script = ("import sqlite3,os; db=sqlite3.connect(" + repr(str(source)) + "); "
+                      "db.execute('PRAGMA journal_mode=WAL'); "
+                      "[db.execute('CREATE TABLE '+name+' (id TEXT)') for name in ('session','message','part')]; "
+                      "[db.execute('INSERT INTO '+name+' VALUES (?)',('source-row',)) for name in ('session','message','part')]; "
+                      "db.commit(); os._exit(0)")
+            subprocess.run([sys.executable, "-c", script], check=True, timeout=10)
+            original = digest(source)
+            wal = Path(str(source) + "-wal")
+            original_wal = digest(wal)
+            helper = Path(__file__).parents[1] / "backup.py"
+            subprocess.run([sys.executable, str(helper), str(root), "--source", str(source), "--frozen-clone"],
+                           check=True, stdout=subprocess.DEVNULL, timeout=15)
+            report = read_private(root / "reference/backup.json", require_private=False)
+            self.assertEqual({"session": 1, "message": 1, "part": 1}, report["counts"])
+            self.assertEqual("ok", report["quick_check"])
+            self.assertEqual(original, digest(source))
+            self.assertEqual(original_wal, digest(wal))
+
     @unittest.skipUnless(sys.platform == "darwin", "macOS process exit race")
     def test_identity_handles_exit_between_kernel_and_argv_reads(self):
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"], start_new_session=True)

@@ -9,6 +9,7 @@ import os
 import pathlib
 import sqlite3
 import shlex
+import subprocess
 import time
 
 
@@ -19,6 +20,7 @@ def main():
     parser.add_argument("--source", default=str(home / ".local/share/opencode/opencode.db"))
     parser.add_argument("--target")
     parser.add_argument("--snapshot-only", action="store_true")
+    parser.add_argument("--frozen-clone", action="store_true", help="APFS clone of a stopped V1 database; refuses live writers")
     args = parser.parse_args()
     source = pathlib.Path(args.source).resolve()
     root = pathlib.Path(args.root).resolve()
@@ -33,14 +35,26 @@ def main():
     os.umask(0o077)
     started = time.monotonic()
     temporary = target.with_name(f"opencode-backup-{os.getpid()}.db")
+    if args.frozen_clone:
+        from cutover.host import Host
+        if Host().writers(source):
+            raise RuntimeError("Frozen clone requires all source writers to be stopped")
     with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as original:
         # Pin one read snapshot. Without this transaction, backup stepping can
         # restart repeatedly while the live agents keep writing to the source.
         original.execute("BEGIN")
         original.execute("SELECT count(*) FROM sqlite_master").fetchone()
         print("Snapshot pinned; copying live history without blocking writers", flush=True)
+        if args.frozen_clone:
+            for suffix in ("", "-wal"):
+                source_file = pathlib.Path(str(source) + suffix)
+                if source_file.exists():
+                    copied_file = pathlib.Path(str(temporary) + suffix)
+                    subprocess.run(["/bin/cp", "-c", str(source_file), str(copied_file)], check=True, timeout=60)
+                    copied_file.chmod(0o600)
         with closing(sqlite3.connect(temporary)) as copied:
-            original.backup(copied, pages=8192, sleep=0.05)
+            if not args.frozen_clone:
+                original.backup(copied, pages=8192, sleep=0.05)
             check = copied.execute("PRAGMA quick_check").fetchone()[0]
             if check != "ok":
                 raise RuntimeError(f"Copied database check failed: {check}")
@@ -48,6 +62,8 @@ def main():
                 name: copied.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
                 for name in ("session", "message", "part")
             }
+            if args.frozen_clone and counts != {name: original.execute(f"SELECT count(*) FROM {name}").fetchone()[0] for name in counts}:
+                raise RuntimeError("Frozen clone differs from pinned source counts")
             # A SQLite connection context commits but does not close. Close and
             # checkpoint before moving the main file, or its WAL stays attached
             # to the old temporary filename rather than the published database.
@@ -64,7 +80,7 @@ def main():
         "created": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "source": str(source),
         "target": str(target),
-        "method": "sqlite-online-backup-readonly-source",
+        "method": "apfs-frozen-clone-readonly-source" if args.frozen_clone else "sqlite-online-backup-readonly-source",
         "quick_check": check,
         "reopened_counts_verified": True,
         "counts": counts,
