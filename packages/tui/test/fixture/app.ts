@@ -15,6 +15,7 @@ export async function createAppFixture(
     config?: Config.Info
     args?: TuiInput["args"]
     clientID?: string
+    packages?: TuiInput["packages"]
     fetch?: FetchHandler
   } = {},
 ) {
@@ -46,7 +47,7 @@ export async function createAppFixture(
           return next
         },
       },
-      packages: { prepare: async () => ({ directory: "" }) },
+      packages: input.packages ?? { prepare: async () => ({ directory: "" }) },
       terminalHandoff: async () => ({ renderer: setup.renderer, mode: "dark", complete: ready.resolve }),
       args: input.args ?? {},
       clientID: input.clientID,

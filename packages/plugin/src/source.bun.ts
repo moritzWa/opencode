@@ -67,5 +67,22 @@ export async function prepareSource(entrypoint: string, track: (file: string, di
     }
   }
   visit(root)
-  return { version: String(++generation), load: () => Host.load(entrypoint) }
+  // A source bridge must not make Bun native-load its NPM target as a nested
+  // dependency before the host's shared-runtime/JSX loaders see that entry.
+  // Load a pure default re-export's dependency as an SDK entry first, preserving
+  // normal ESM evaluation order and the bridge's actual namespace afterwards.
+  const trivia = String.raw`(?:\s|//[^\n]*(?:\n|$)|/\*[\s\S]*?\*/)*`
+  const forwarding = new RegExp(
+    String.raw`^${trivia}export\s*\{\s*default\s*\}\s*from\s*(["'])([^"']+)\1\s*;?${trivia}$`,
+  ).exec(readFileSync(root, "utf8"))
+  return {
+    version: String(++generation),
+    load: async () => {
+      if (forwarding && !provides(forwarding[2])) {
+        const dependency = Bun.resolveSync(forwarding[2], path.dirname(root))
+        if (dependency.split(path.sep).includes("node_modules")) await Host.load(pathToFileURL(dependency).href)
+      }
+      return Host.load(entrypoint)
+    },
+  }
 }
