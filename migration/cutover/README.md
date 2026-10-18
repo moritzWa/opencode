@@ -141,7 +141,7 @@ history. Visibility checks respect existing hidden-session state.
 Authority transfers only after native runtime/lease/listener/API identity,
 installed binary hashes, dashboard source receipt, ownership, transcripts and
 model/default-path checks pass. The pending gate is then removed. The final
-Ghostty launch uses explicit `--initial-command`; a kernel PID/start-token and
+Ghostty launch uses its explicit `-e` argument vector (verified on the host); a kernel PID/start-token and
 executable receipt verifies the new dashboard. It does not close other apps or
 inject keys into an existing terminal.
 

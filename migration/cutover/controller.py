@@ -13,7 +13,6 @@ import json
 import os
 from pathlib import Path
 import plistlib
-import shlex
 import shutil
 import signal
 import sqlite3
@@ -500,8 +499,16 @@ class Controller:
         self.stop_identity("backend", identities["backend"])
         self.journal["resources"]["v1Stopped"] = True
         self.save()
-        if self.h.port_open(self.plan["preflight"]["originalPort"]) or self.h.writers(self.s.original):
-            raise Refusal("V1 endpoint or writable database handles remain")
+        # Kernel process exit can precede release of its sockets/SQLite handles.
+        deadline = self.h.now() + 10
+        while True:
+            endpoint = self.h.port_open(self.plan["preflight"]["originalPort"])
+            writers = self.h.writers(self.s.original)
+            if not endpoint and not writers:
+                break
+            if self.h.now() >= deadline:
+                raise Refusal(f"V1 resources remain after shutdown: endpoint={endpoint}, writerPIDs={sorted(writers)}")
+            self.h.sleep(0.1)
         self.retire_holds()
         for name in ("server.json", "restart-pending.json", "handoffs.json"):
             (self.s.state / name).unlink(missing_ok=True)
@@ -758,12 +765,12 @@ class Controller:
         request = self.directory / (mode + "-dashboard-request.json")
         cwd = self.plan["preflight"]["dashboardCwd"]
         private_json(request, {"receipt": str(receipt), "argv": [str(self.s.dashboard), "--opencode-bin", str(self.s.logical), "--include-external", "--include-interactive", "--no-host-claude"], "environment": {key: value for key, value in env.items() if key in ("HOME", "PATH", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "AGENTVIEW_OPENCODE_API", "AGENTVIEW_OPENCODE_SERVICE_FILE", "OPENCODE_CUTOVER_COORDINATOR")}, "cwd": cwd})
-        initial = shlex.join([sys.executable, str(Path(__file__).with_name("dashboard.py")), str(request)])
         requested=mode+"DashboardRequested"
         if not self.journal["resources"].get(requested):
             self.journal["resources"][requested]=True
             self.save()
-            self.h.capture(["/usr/bin/open", "-na", self.s.ghostty, "--args", "--working-directory=" + cwd, "--initial-command=" + initial], env=env)
+            self.h.capture(["/usr/bin/open", "-na", self.s.ghostty, "--args", "--working-directory=" + cwd,
+                            "-e", sys.executable, str(Path(__file__).with_name("dashboard.py")), str(request)], env=env)
         deadline = self.h.now() + self.s.dashboard_timeout
         expected = str(self.s.profile / "bin/native/agentview") if mode == "v2" else None
         while self.h.now() < deadline:
@@ -789,7 +796,7 @@ class Controller:
             "Read the durable cutover journal and status before acting: " + str(self.path) + ". "
             "Stable status pointer: " + str(self.s.profile / "runtime/cutover-status.json") + ". "
             "Verify actual installed/running/default CLI and agentview paths, service identity, DB/config selection, and native tool smoke. "
-            "No unrelated old session was auto-resumed. Compare each checkpoint with its latest imported messages (including newer recruiting read-only requests/results). Continue the three paused tasks only after that comparison and reconciling external actions; do not replay sends/writes blindly.\n" + peers +
+            "No unrelated old session was auto-resumed. Compare each checkpoint with its latest imported messages (including newer recruiting requests/results). Continue the checkpointed tasks only after that comparison and reconciling external actions; do not replay sends/writes blindly.\n" + peers +
             "\nFinish source/branch/worktree/child-session cleanup and final user signoff. The coordinator owns only this transition; inspect its completed launchd job and private journal before removing it. "
             "Preserved V1 rollback and immutable frozen source are under " + str(self.backup) + ".")
 

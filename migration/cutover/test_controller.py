@@ -9,7 +9,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
-import shlex
 import shutil
 import signal
 import socket
@@ -197,9 +196,8 @@ class FakeHost(Host):
                 for row in snapshot["sessions"]: row["kind"] = "managed"
             return json.dumps(snapshot)
         if argv[0] == "/usr/bin/open":
-            assert "-e" not in argv
-            initial = next(arg.split("=", 1)[1] for arg in argv if arg.startswith("--initial-command="))
-            request = read_private(shlex.split(initial)[-1])
+            assert argv[-4] == "-e"
+            request = read_private(argv[-1])
             mode = "v2" if request["environment"].get("AGENTVIEW_OPENCODE_API") == "v2" else "v1"
             pid = 500 if mode == "v2" else 600
             self.add_identity(pid, str(self.s.profile / "bin/native/agentview") if mode == "v2" else str(self.s.dashboard))
@@ -456,6 +454,31 @@ class CutoverTests(unittest.TestCase):
         with self.assertRaises(Refusal): control.run()
         self.assertEqual([],self.h.signals)
         self.assertEqual("refused_before_actions",control.journal["status"])
+
+    def test_shutdown_waits_for_delayed_database_handle_release(self):
+        original = self.h.writers
+        released = []
+        def writers(database):
+            if Path(database) == self.s.original and 100 not in self.h.identities and 400 not in self.h.identities:
+                if not released:
+                    released.append(self.h.now() + 2)
+                if self.h.now() < released[0]:
+                    return {100}
+            return original(database)
+        self.h.writers = writers
+        control = self.controller()
+        control.run()
+        self.assertEqual("handoff_admitted", control.journal["status"])
+        self.assertTrue(released)
+
+    def test_shutdown_reports_surviving_writer_without_signalling_it(self):
+        original = self.h.writers
+        self.h.writers = lambda database: ({999} if Path(database) == self.s.original and 100 not in self.h.identities else original(database))
+        control = self.controller()
+        with self.assertRaisesRegex(Refusal, r"writerPIDs=\[999\]"):
+            control.run()
+        self.assertNotIn("backup", self.h.commands)
+        self.assertFalse(any(group == 999 for group, _ in self.h.signals))
 
     def test_updated_checkpoint_requires_renewed_arm(self):
         Path(self.s.checkpoints[1][2]).write_text("Renewed recruiting checkpoint")
