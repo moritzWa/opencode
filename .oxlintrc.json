@@ -24,6 +24,12 @@
   },
   "overrides": [
     {
+      "files": ["migration/plugins/legacy/memory.js"],
+      // Frozen V1 bundle: Zod invokes arbitrary validated functions with their
+      // original receiver. These Reflect.apply calls are genuine reflection.
+      "rules": { "no-restricted-globals": "off" }
+    },
+    {
       "files": [
         "packages/app/**",
         "packages/desktop/**",

@@ -1,0 +1,125 @@
+# Migration integration status
+
+User mandate: autonomous full-parity migration, no input required until complete. Preserve heavily used UI details and plugins, not only essentials. Manager session `ses_eb9f07705ffeNJGcxTvu16q0bv`. Canonical session directory remains `/Users/m/Code/opencode`; edits occur in this `v2-migration` worktree.
+
+## Latest updates (supersede older pending notes below)
+
+- agentview PR **Support OpenCode V2 alongside V1** merged and VERIFIED on `origin/main` as `293dd4072eb3a9e83ba4b8468f145d26b963f404`. All20 cross-platform checks passed. Only CI/package artifacts trigger, no deploy workflow. Approved installer `install-latest.sh agentview` completed, installed inode395784499 from293dd40. RUNNING dashboard PID44528 is still OLD and must be relaunched at final cutover (argv includes `--no-host-claude`; preserve this flag). Do not claim installed equals running.
+- Integrated source now includes strict object generation `fc15fdc90b`, full MessageApi `5b520231dc`, native instruction entries `178190fa80`, MCP OAuth migration `5a9616ade0`, native link QA `36566c0301`.
+- Core child recovery followup `dcdfcc9806` integrated as `6eab7352fe`: removes unnecessary parentID exclusion only; real child/foreground ownership/late-policy cancellation tests passed, canonical push passed.
+- Full plugin package/cache/runtime proofs all PASSED. Cache producer uses durable split native entries + storage, no system rewrites; actual first-user/tool-loop/index/ignore/native-compaction/SQLite-reopen/resume wire prefix proved stable. Full raw history API, MCP real subprocess hooks, exact memory sandbox, monitor/BG teardown-reopen once-only wake/groups, and actual native App link propagation proof passed.
+- Latest parity archive after memory-only isolation option: SHA256 `723b7c85f233a9c8eaf3d6d938b13b34bcb833a584039d9a39c1fd79068f12de`; speech archive SHA256 `72fd54eb3be09a6b040f92447457ecfd5866ef625c19202d543adc81b59cd9a3`, in `migration/plugins/artifacts`. Set options.memoryConfigDir only for rehearsal; do NOT globally set CLAUDE_CONFIG_DIR (auth also reads it). Copy actual Claude project memory docs plus opencode-memory state there. Production omits override.
+- Actual provider probes: native OpenAI Sol6.1 and Cursor Opus5 PASSED exact model/text, zero tools. Cursor probe used existing company work directory, no tools/writes. Claude exposed TWO real installed-hop defects, neither quota: unsupported SDK `/promise` value import/default dist/dist root; fixed private auth0.1.1 compiled/no-SDK-copy regression. Then REAL upstreamHTTP200 had ZlibError because gateway forwarded stale gzip headers after Bun auto-decompression. Auth0.1.2 fixes all success/error/passthrough hop framing; actual gzip HTTP→pinned transport→gateway→Bunclient and real Anthropic-parser/runner tests passed. NEW artifact `/var/folders/n9/hr809bk55vb2tm653_tkg7m00000gn/T/opencode/local-opencode-subscription-auth-0.1.2-gzip-fix.tgz`, SHA256 `9aa47f88086548b1a30f7ff50561a159fb3f93512d92e44e3b71f4302da50a07`; MANIFEST NOT UPDATED YET. Need install/reprobe only Claude, not duplicate successful other vendors.
+- Account-only assembler was RUN successfully (native diagnostics empty) and two exact packed packages installed in isolated profile. Hash-suffixed durable artifact filenames now force correct immutable Bun resolution. AccountSource hardcoding removed; persisted original preference is honored.
+- Corrected auth0.1.2 INSTALLED and actual Claude reprobe PASSED exact expected text, actual anthropic/claude-sonnet-5-5/default, zero tools in2seconds. All three vendor paths now have real successful probes. All6 previously working MCPs CONNECTED, including Slack with imported OAuth and no login. Configured cua-driver remains pre-existing missing executable, separately captured in private mcp-status report.
+- Fresh source-stamped binary built at6eab7352fe, version2.0.32-migration.6eab7352fe, SHA256 acb3b56292d9fb8d374156b55f1531f65852f04b902bded4a2fece17500b1bd7. Full4-package profile assembled+installed. Packed profile preflight all critical plugins active and zero failed. Inventory alone does not activate a new Location; model metadata lookup first does.
+- Full-profile paid memory acceptance now underway in isolated profile. Packed MemoryStore seeded synthetic reference only in copied memory root. Test-only selector wait15seconds ensures real structured selection can finish; normal assembly restores original wait budget. Production memory root untouched; no global CLAUDE_CONFIG_DIR override.
+- agentview post-merge UbuntuARM CI exposed ETXTBSY in parallel executable fixtures, no production app regression. Owner pushed test-only9cf71720ee4daa867a63320eca89fa6c035da0ab onmain. Concurrent5restart cases and Rust1.75 Clippy passed; newmain CI39081167258 watched by owner. Do not equate old merged-main CI failure with accepted greenfinalmain.
+- A read-only audit found a REAL TODO omission:112 recent writes23sessions; V1 table506saved items114sessions, manager4items3unfinished. Cursor opt-in implementation is in-memory/no UI. UI owner resumed to build exclusive `migration/todo` server+TUI portable parity (durable state, legacy seeding, RPC sidebar/tool card, native all-model tools, restart/clear isolation). Todo source/pack still pending. Existing plugin/tool source untouched by that stream.
+- Same audit proved LSP is NOT active baseline: V1 `!cfg.lsp` disables and global setting omitted; flags unset; latest605write/edit/patch results all diagnostics `{}`, no query-tool calls. No unused LSP port required.
+- Host `cua-driver` executable is missing, as is pre-existing configured MCP binary. Do not install/upgrade merely to follow a recipe. Existing Cua Spaces native control is available. GUI TESTING stays in shared VM; final actual dashboard relaunch needs authorized, exactly-targeted host operation, not tests or blind terminal input.
+- Adrafinil CLI `--help` verified existing host helper supports acquire/release/status. Real own-session acquire/release check remains; do not release other holds.
+- TODO real-host server acceptance now GREEN6cases67assertions: non-Cursor direct tools, SQLiteKV reopen/clear tombstone, isolation, RPC/SSE reconnect, readonly legacy seeding, instruction authority. Actual manager4saved/3unfinished restored in isolated KV with sourceDB unchanged. Native historical cards+ordinaryread/write renderer44tests100assertions passed. Final sidebar checks/artifact/TUI commit still owner pending.
+- TODO now integrated: package cdd85b4417 and native historical renderer5d5ede80ce (sourcecd61ea666e, pushed). Final artifact852821825b69eea7545433e70355cbcbae9d0f4d39e9b11f300ddc02a6efaa62 installed as fifth package. Native/packed server70pass750assert and sidebar/history/reconnect30pass180assert repeated proofs passed. Assembler registersTodo beforeCursor, disablesCursorfallback, binds explicit profileDB readonly seed path. Native tool renderer preserves ordinary read/write cards.
+- Integrated canonical lint/type checks PASSED34/34; frozen bundledZod genuineReflect.apply gets narrowly scoped lint exception. Actual paid memory recall PASSED4seconds: exact random passphrase returned byOpenAISol with0tools and persistedmemory.recalled entry. Synthetic fixture exists only in copied memory root. Test wait override RESTORED by final normal assembly.
+- agentview finalMAIN9cf71720ee4daa867a63320eca89fa6c035da0ab GREEN8/8 acrossLinuxARM/x86,macARM/Intel,Windows,Rust1.75/stable,quality. Move main39078860385 green; no deploy. Owner verified ancestry, removedownworktree/localbranches andremotev2-opencode absent. Installed app sources still293dd40 (9cf onlytests); runningdashboard stillold asintentional untilcutover.
+- Real MCP read acceptance COMPLETE: personalGmail+ArcaGmail labels, Drive1filemetadata, Slackchannelsearch, CuaSpacesmetadata all completed underactualSol/nativeleafhooks. Calendar handshake hid missingseparateXDGtokens; assemblernowcopies its private tokenstore intoisolatedXDGconfig, targetedrealCalendarlist recheckPASSED. No sends/drafts/writes to external integrations. Native MCP catalogs populate progressively during startup; preflight waits connected statuses before model requests. Native direct tool exposure is accepted alongside CodeMode; CodeMode hook enforcement was independently proven by packed-host fixture.
+- Approved global installer now has explicit INSTALL_LATEST_OPENCODE_V2_REF=remote/branch opt-in, pushed-source verification, isolated build worktree, full V2CLI/webbuild and sticky successfulsource topreventlaterV1downgrade. FirstinstallrequiresNO_RESTART forcoordinatedhandoff; normalV2updatesretainexistingrestartbehavior; explicitV1rollback preserved. bash-n PASSED; actualinstallerexecution remains pending after sourcepush/VMacceptance.
+- Rehearsal-only metadata audit available viaenable-request-audit.ts; capturesonlytoolnames/status/modelrefs, notprompts/headers/results. Normalassemblyremovesit. SharedVMrecord alreadyexists, VMremuted; allotherusers/browserprofiles remainintact. agentview child hiddenafterverifiedfinalmain/worktreecleanup; currentdashboardpicksitupatplannedrestart.
+- Scope current outstanding: finaltodo package/TUIintegration, latestagentviewmain CI, paid memory/compaction/MCP and old-import continuation, VM real Ghostty/audio, final integratedchecks/source shipping/installer/handoff/default switch/cleanup.
+
+## Live setup
+
+- The daily V1 binary, configuration and database have NOT been replaced or restarted.
+- Isolated profile: `/Users/m/.local/share/opencode-v2-migration`.
+- Its `profile.json` points to `data/opencode/history-v1.db`; this is a writable rehearsal copy, not the original V1 database.
+- Candidate server is currently STOPPED. Previous server monitor groups were stopped and verified gone. `runtime/connection.json` is stale and private; never print its password.
+- Immutable retained V1 source: `snapshots/v1-rehearsal-after-ports.db`, mode 0400, consistent online backup with checkpoint/close/reopen verification. 1,018 sessions / 113,551 raw messages / 417,314 raw parts.
+- Initial backup helper had a WAL-publication defect; fixed before acceptance. The current helper pins a read transaction, checkpoints/closes before rename, reopens and compares counts. Initial invalid candidate artifacts are retained for diagnosis; they are not rollback sources.
+
+## Integrated source
+
+Frozen baseline `86c7f7c840` (V2.0.32 development source). Manager cherry-picks:
+
+| Source commit | Manager commit | Behavior |
+| --- | --- | --- |
+| e2dcb39563 | 27db6529f4 | targeted TUI routes/capabilities and atomic unanswered prompt withdrawal |
+| 3bbe482def | 71c3067a39 | complete TUI workflow parity |
+| be4e5fe5f8 | 4a8320d78a | durable in-drain auth/model recovery |
+| af8e18cc9d | dc2bbe8fb9 | stale skills and public diagnostics |
+| cb2c227a20 | fcd3b953e9 | CLI skill diagnostics |
+| 511458a584 | 2645754cca | exhaustive diagnostics fixtures |
+| ff4837d48f | af8e5152ae | non-destructive staged V1 history imports |
+| 3f5a83fd15 | a9930ab850 | runtime resilience, tool hooks, eviction, narration, read suppression |
+| d84d04d0f9 | fc15fdc90b | strict session object generation and public Promise cancellation |
+
+Combined root canonical check passed before the last strict-generation cherry-pick: lint zero errors, all 34 type tasks passed. Each source stream's final commit also passed canonical checks. Final assembled checks remain required.
+
+## Agent deliverables
+
+- Core `v2-core` worktree, session `ses_eb44d0425ffeclxJkrLZcLMXKf`: complete through d84d04d0f9, pushed/clean. Core suite 6,680 pass / 43 existing skips / zero failures. Strict real HTTP/provider tests 10x1,610 assertions; actual SDK plugin cancellation 10x100 assertions, provider activity 1→0 before fork deletion. No owned jobs remain.
+- UI `v2-interface`, session `ses_eb44cd45fffeLCZ0N50Zd14JQp`: complete; ONLY UI-owned commits 3bbe482def and cb2c227a20 were integrated. Other branch commits duplicate core. 36 renderer tests/131 assertions; repeated exact-target/withdrawal/narrow/wide proof 50 pass/150 assertions; CLI migration 19/72; CLI diagnostics 2/8; canonical 34-task checks passed.
+- History `v2-history`, session `ses_eb43e6110ffeCNDx2wmhCpHTFN`: complete ff4837d48f, pushed/clean. 35 real SQLite cases x10, 350 pass; canonical checks passed. Retain worktree until integrated acceptance/cleanup.
+- Auth session `ses_eb44b6e19ffei7vTIiww6l7zrS`: complete files under `migration/auth`, ready for manager staging. 13 real HTTP/loader/classification/runner scenarios, 80 assertions; five durable recovery cases. Its separate core worktree was removed after core integration. Packed artifact below.
+- Provider session `ses_eb44d023bffet3zNlHcEZE92l5`: complete commit 450fe72, branch verify-opencode2-parity, retained worktree in provider repo. PR **Complete OpenCode 2 native image permissions and verify packed plugin parity**: https://github.com/moritzWa/cursor-opencode-provider/pull/1 (base local/recovery-on-0.8.1). 1,507 tests passed and actual packed host loader/adapter/schema checks passed. No CI configured on that PR.
+- Plugins session `ses_eb44d042dffeEOciGkY6526ZX7`: owns `migration/plugins`, active final combined SDK/MCP runtime proof and final artifacts. Read-aloud branch v2-plugin-port now includes 91b4d3f6c1f102d9d81990dd9760bd6ed0bbc1ba (speed preference seed); PR **feat: support native V2 TUI plugins alongside V1**: https://github.com/moritzWa/opencode-read-aloud/pull/20. Original V1 entry preserved. Native 0.5.17/Solid1.9.15 loader/renderer packed tests passed; current full scenario debugging local MCP valid-call reachability, do not claim acceptance yet.
+- agentview session `ses_eb44d0428ffeY5x0TVak305GOK`: PR **Support OpenCode V2 alongside V1** https://github.com/moritzWa/agentview/pull/35. Branch v2-opencode, latest reported bb72ed1387c4e26ef52416bf7fbfaf5a3176a5e7. Includes durable handoff import/resume plus stable continuation IDs, actual source/compiled two-TUI targeting proof and no-broadcast speech command proof. All local unfiltered suites pass on stable and Rust1.75, 712 lib /21 CLI /5 README /24 PTY plus other targets; Clippy warnings-denied passed. Cross-platform remote CI still has failures; agent owns repairs and watcher. Manager also watches terminal CI result. Do not merge/install before green and review.
+
+## Proven history acceptance
+
+- Initial import audited every session/message against actual exported transform: 1,016 sessions /115,960 projections, zero missing/changed/skipped warnings.
+- Offline corrected importer adopted receipts into rehearsal.
+- Fresh retained V1 snapshot staged and refreshed into rehearsal without replacing V2 tables.
+- Refreshed audit: 1,018 sessions /116,941 expected projections =116,928 exact ID/type/canonical payload matches plus 13 rigorously proved derived legacy-tool-notice aliases. ALL113,187 original-source-ID projections match exactly; zero real missing/changed and zero warnings.
+- Aliases are only a trailing generated system notice, globally absent from raw message IDs, identical existing same-session notice text, exactly one match, with both old/new receipt hashes matching. No real-source timestamp/content check is weakened.
+- Independent read-only verification covered all13 and confirmed zero database changes. Reports in profile runtime directory; auditor now records equivalences explicitly.
+
+## Contracts that must stay aligned
+
+- `capabilities.tuiSessionSelect`, `capabilities.tuiExecuteCommand`.
+- POST `/api/tui/select-session` `{sessionID,client?,targetDirectory?}`; agentview ALWAYS supplies stable client ID, never broadcasts as fallback.
+- POST `/api/tui/execute-command` `{command,client}`; client required.
+- `OPENCODE_TUI_CLIENT_ID` separately propagates even with explicit `--server` (which intentionally omits host env).
+- Inbox withdrawal returns `{accepted:boolean}`. Empty starts/reasoning alone are withdrawable; first nonempty text or tool entry closes window; UI restores only accepted true.
+- `ctx.session.generateObject({sessionID,prompt,schema}, requestOptions?)` returns **`{object}`**; wire is `{data:{object}}`. Both context and generate hooks run. Provider-enforced synthetic output tool only; no arbitrary tools or durable mutations. RequestOptions AbortSignal now reaches actual in-process Effect execution.
+- Native plugin tools are now `codemode:false` for legacy parity. Otherwise memory agents denying execute cannot access allowed memory tools. MCP remains native Code Mode. Plugins owner adding actual snapshot/extraction proof.
+- Speech speed seed is 1.9 from original kv.json; native persisted values win. Keys and cache retain original XDG layout. Configured Dominic/simba-3.0 wins over defaults.
+- No new refresh HTTP server/API. Offline `Database+Global+V1Migration` only, after proving candidate has no open handles. `stageSource` reads an external immutable V1 snapshot and upserts only legacy tables; `run({refresh:true,nextDatabasePath:false})` merges with receipts. Never reset migration marker or overwrite V2 continued history.
+
+## Manager scripts and artifacts
+
+- `prepare.ts`: isolated profile/reference copies, initial no-plugin config, copied auth file, source build launcher.
+- `backup.py`: online snapshot, pinned read, checkpoint/close before publish, reopened counts; `--snapshot-only --target PATH` retains an immutable source without changing profile. `--source` supports copying retained source into a new final candidate.
+- `serve.py`: bounded four-hour authenticated candidate server lease; credentials in private runtime file only; no managed service election.
+- `wait-history.py`, `audit-history.mjs`, `accept-server.py`: real import/status/API/history checks.
+- `refresh-history.ts`: refuses live V1 and open handles, composes only Database+Global; optional external snapshot argument.
+- `assemble.ts`: NOT RUN except `--check` adapter-load smoke. Needs all four tarballs in ignored `artifacts.json`. Uses actual config normalizer/CLI migrator, preserves all settings, replaces blacklists with public model policy, includes global/project CLAUDE instructions explicitly, generates V2 notes preserving original guidance, copies persisted preferences/keys/audio cache, installs directory wrapper entrypoints. Stores artifact copies durably in profile, not only tmp.
+- `opencode-bg.sh`, `message.py`: staged dual V1/V2 helpers; NOT installed globally. Current original helper remains V1.
+- `model-policy.ts`, `policy/server.ts`: exact original provider exclusions, leave Groq available internally for title while UI allowlist handles selection.
+- Auth tar: `/var/folders/n9/hr809bk55vb2tm653_tkg7m00000gn/T/opencode/local-opencode-subscription-auth-0.1.0.tgz`.
+- Provider FINAL tar: same directory `cursor-opencode-provider-opencode2-parity.tgz`; SHA256 `64af05fd3055ef2a9767d76b7295b20eb92f249ca116b78cb1e0da6f9993dd62`. Preliminary other provider tar is obsolete.
+- Plugin/speech final tarballs pending plugin owner. Do not pack while owner changes package.
+- `migration/.gitignore` excludes node_modules, Python caches, generated tgz/artifacts and machine-specific artifacts.json. Track source/locks/docs, never private profile/credentials/database.
+
+## VM preparation
+
+- Shared `local:mac-for-desktop-testing` already running; did NOT start it and must NOT stop it or other apps.
+- Usage record `~/.space-users/ses_eb9f07705ffeNJGcxTvu16q0bv`.
+- Own directory `/Users/lume/Code/opencode-v2-migration`, initial baseline binary uploaded (old baseline only; replace with final candidate).
+- Own app `/Users/lume/Applications/OpenCode-V2-Ghostty.app`, Ghostty1.3.1 official DMG copied with ditto and deep code signature verified. Initial recursive upload skipped framework symlinks; repaired from official mounted DMG, mount detached.
+- Copied unchanged user Ghostty config under own config/ghostty. VM uses US input; user physical Ctrl-byte mappings in that config must be respected. Do not change global VM input source/Karabiner.
+- Own static ffmpeg6.0 at bin/ffmpeg (release ffmpeg-static b6.1.1, upstream SHA256 a90e3db6a3fd35f6074b013f948b1aa45b31c6375489d39e572bea3f18336584), version checked.
+- VM remains muted/volume0. No Ghostty GUI launched yet. No speech key copied into VM yet.
+- Outlook owner ses_eb4ce9fccffeTqAWgUP46TWEDD explicitly cleared own Ghostty foreground tests, asks keep Chrome ~/chrome-entra port9620 intact, keep muted, restore prior focus. Recruiting owner ses_f01e25e61ffe4tn49x10ZJtk3X was contacted; no response yet. Never close shared browsers/Word/VM.
+- Skills loaded: cua-gotchas, cua-spaces, cua-driver(+macOS/runtime), keyboard-shortcuts, account-delegation. GUI never on host. Explicit sandbox on every computer call.
+
+## Remaining execution
+
+1. Finish plugin combined actual runtime proof, strict mapping, native memory sandbox, restart recovery and final packed artifacts.
+2. Assemble profile/install pinned packages, build final integrated candidate, run actual subscription-provider/paid memory selector/compaction and real MCP checks. No real email/text sends as tests.
+3. Full real Ghostty/agentview UI/audio/highlight/link/folding/toolbar/shortcut acceptance in VM; host binary/path/process smoke without hijacking user desktop.
+4. Resolve remote agentview CI, review/merge appropriate private fork PRs (provider and read-aloud no CI configured; local evidence good). Keep source caches/rollback independent.
+5. Ship integration source to new pushed V2 daily branch, preserve V1 daily branch. Extend ONLY approved install-latest.sh path for V2; never bare install reserved binary.
+6. Quiescent final handoff, with a successor coordinator OUTSIDE the V1 server being stopped. See agentview doc for private manifest validation/adoption/idempotent continuation. Fresh frozen snapshot; no blind live duplicate-ID routing. Capture/drain tools, monitors and background jobs; uncertain external effects are not blindly replayed.
+7. Final default config/data/supervisor selection plus dual helpers/notes; verify installed AND running revisions and live behavior. Preserve V1 fallback profile/binary/snapshot.
+8. Clean owned worktrees/branches/monitors/processes and hide ONLY completed child sessions. No final success claim until real cutover and acceptance are complete.

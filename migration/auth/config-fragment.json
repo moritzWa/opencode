@@ -1,0 +1,7 @@
+{
+  "plugins": [
+    {
+      "package": "./migration/auth"
+    }
+  ]
+}

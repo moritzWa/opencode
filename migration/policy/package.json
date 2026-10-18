@@ -1,0 +1,6 @@
+{
+  "name": "@moritz/opencode-model-policy",
+  "private": true,
+  "type": "module",
+  "exports": { "./server": "./server.ts" }
+}

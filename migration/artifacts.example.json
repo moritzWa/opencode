@@ -1,0 +1,7 @@
+{
+  "cursor-opencode-provider": "/absolute/path/to/cursor-opencode-provider-opencode2-parity.tgz",
+  "@local/opencode-subscription-auth": "/absolute/path/to/local-opencode-subscription-auth-0.1.2.tgz",
+  "@moritz/opencode-parity-plugins": "/absolute/path/to/moritz-opencode-parity-plugins.tgz",
+  "opencode-read-aloud": "/absolute/path/to/opencode-read-aloud.tgz",
+  "@moritz/opencode-todo": "/absolute/path/to/moritz-opencode-todo-0.1.0.tgz"
+}

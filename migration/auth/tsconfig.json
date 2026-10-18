@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "target": "ESNext", "module": "Preserve", "moduleResolution": "Bundler",
+    "strict": true, "skipLibCheck": true, "allowImportingTsExtensions": true,
+    "types": ["bun"], "typeRoots": ["../../packages/core/node_modules/@types"], "noEmit": true,
+    "paths": { "@opencode/plugin": ["../../packages/plugin/src/promise/index.ts"], "@opencode/plugin/*": ["../../packages/plugin/src/*"], "@opencode/schema/*": ["../../packages/schema/src/*"] }
+  },
+  "include": ["server.ts", "src/**/*.ts", "test/**/*.ts"]
+}

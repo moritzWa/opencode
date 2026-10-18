@@ -1,0 +1,17 @@
+{
+  "name": "@moritz/opencode-parity-plugins",
+  "version": "0.0.0-migration",
+  "private": true,
+  "type": "module",
+  "exports": { "./server": "./server.js", "./server-only": "./server.js", "./tui": "./tui.js", "./bridge": "./bridge.js" },
+  "files": ["*.js", "legacy", "server-only", "ui-only", "config-fragment.json", "tui-fragment.json", "PARITY.md"],
+  "scripts": { "build": "bun build.ts", "test": "bun test test", "verify": "bun run build && bun test test", "verify-combined": "bun run build && bun test test/combined.test.js", "verify-cache": "bun run build && bun test test/cache.test.js", "verify-packed": "bun install --ignore-scripts && bun run verify", "pack": "bun pack.ts", "accept": "bun run verify-packed && bun run pack" },
+  "dependencies": {
+    "@opencode-ai/plugin": "1.18.34",
+    "opencode-read-aloud": "github:moritzWa/opencode-read-aloud#91b4d3f6c1f102d9d81990dd9760bd6ed0bbc1ba",
+    "opencode-claude-memory": "2.0.2",
+    "opencode-plugin-peers": "0.2.4"
+  },
+  "peerDependencies": { "@opentui/core": "*", "@opentui/solid": "*", "solid-js": "*" },
+  "devDependencies": { "@opentui/core": "0.5.17", "@opentui/solid": "0.5.17", "solid-js": "1.9.15" }
+}

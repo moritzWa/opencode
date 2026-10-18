@@ -1,0 +1,5 @@
+**/node_modules/
+**/__pycache__/
+**/*.tgz
+plugins/artifacts/
+artifacts.json

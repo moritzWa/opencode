@@ -1,0 +1,10 @@
+{
+  "version": 3,
+  "sources": ["../../../../../../../../../.config/opencode/plugins/adrafinil.ts"],
+  "sourcesContent": [
+    "export const Adrafinil = async ({ $ }) => {\n  return {\n    event: async ({ event }) => {\n      if (event.type === \"session.created\") await $`\"/Applications/Adrafinil.app/Contents/Helpers/adrafinil\" acquire ${event.properties.info.id} --tool opencode`\n    }\n  }\n}"
+  ],
+  "mappings": ";;AAAO,IAAM,YAAY,SAAS,QAAQ;AAAA,EACxC,OAAO;AAAA,IACL,OAAO,SAAS,YAAY;AAAA,MAC1B,IAAI,MAAM,SAAS;AAAA,QAAmB,MAAM,qEAAqE,MAAM,WAAW,KAAK;AAAA;AAAA,EAE3I;AAAA;",
+  "debugId": "53FC0770CE70413064756E2164756E21",
+  "names": []
+}

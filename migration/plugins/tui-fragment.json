@@ -1,0 +1,15 @@
+{
+  "plugins": [
+    {
+      "package": "./migration/plugins/node_modules/opencode-read-aloud",
+      "options": {
+        "placement": "footer",
+        "speechify": {
+          "voice": "dominic",
+          "model": "simba-3.0"
+        }
+      }
+    },
+    "./migration/plugins/ui-only"
+  ]
+}

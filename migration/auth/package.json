@@ -1,0 +1,12 @@
+{
+  "name": "@local/opencode-subscription-auth",
+  "version": "0.1.2",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./server.ts", "./server": "./server.ts", "./policy": "./src/policy.ts", "./auth": "./src/auth.ts" },
+  "scripts": { "test": "bun test test", "typecheck": "bun run ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json" },
+  "dependencies": { "opencode-claude-auth": "2.2.1" },
+  "peerDependencies": { "@opencode/plugin": "*" },
+  "peerDependenciesMeta": { "@opencode/plugin": { "optional": true } },
+  "files": ["server.ts", "src", "PARITY.md", "THIRD-PARTY.md"]
+}

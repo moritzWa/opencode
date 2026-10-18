@@ -1,0 +1,50 @@
+[
+  {
+    "source": "plugins/adrafinil.ts",
+    "sha256": "5007de576d4938f37a28dcb681c5bd896bdab9ddb5eda44eee1f98cd6455837a"
+  },
+  {
+    "source": "plugins/background-shell.js",
+    "sha256": "7bc4125cb8185265a42ce3e96512ea16ae38223aba47ae3dcff029ea1a8784d1"
+  },
+  {
+    "source": "plugins/claude-hooks.js",
+    "sha256": "41f33660bd308e93dfa3d29a3141ced635c9e92f6e9a5d87fb4c22f9c118a196"
+  },
+  {
+    "source": "plugins/monitor.js",
+    "sha256": "e3d908f660330a35620b7660ab74c49cda79d36c9ad8f91bf50080d2b01d7b8b"
+  },
+  {
+    "source": "plugins/spawned-sessions.js",
+    "sha256": "80900d15ba9e5d4071195ff94e827f6c89207297cc4e446445c4d393246a458a"
+  },
+  {
+    "source": "plugins/worktree.js",
+    "sha256": "c8975cf8ac79591310ec668346ad8612d02a296ece509ef7f0ad4d83432847e8"
+  },
+  {
+    "source": "tui-plugins/backslash-newline.js",
+    "sha256": "5e92beb21b389c136134f3ffbaa924b4048fe02565fd9d25da5007cd7877f5c3"
+  },
+  {
+    "source": "tui-plugins/clickable-links.js",
+    "sha256": "67c568735da7f4c5a601c4cf44053d53104555c3811f8429b5953034bdf48419"
+  },
+  {
+    "source": "tui-plugins/fold-diffs.js",
+    "sha256": "6a0056f33c56d373173c01aad61880eebab53222a02c0bfab1198ddf3721f495"
+  },
+  {
+    "source": "tui-plugins/pr-footer.js",
+    "sha256": "5c544c1dcf30121b2208fcfb80f491e9552d91aabb3a17cbe0aed53a9a67aa2d"
+  },
+  {
+    "source": "tui-plugins/session-title.js",
+    "sha256": "16a81b54867198346e37abf7db04ca948b78d1668781638b34adc9d09d0fc345"
+  },
+  {
+    "source": "npm:opencode-claude-memory@2.0.2/dist/index.js",
+    "sha256": "e65a731a63447f54d9e019d2f354a537f42356f6fcf1a64682c22f06c6486554"
+  }
+]
