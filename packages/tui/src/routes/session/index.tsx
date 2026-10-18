@@ -124,6 +124,7 @@ import { createHistoryPrepend } from "./history"
 import { context, use, type PendingAction } from "./render-context"
 import { INLINE_TOOL_ICON_WIDTH, InlineToolRow, ReasoningPart, TextPart, toolDisplay } from "./message-parts"
 import { createSessionSearch, SessionSearchBar, searchable } from "./search"
+import { TodoItem, parseTodos } from "../../component/todo-item"
 import { defaultVerbosity, type GroupKind, type SessionEntry } from "./grouping/session"
 import { SessionGroupView } from "./group-view"
 import { useEntryAnchor } from "./anchor-view"
@@ -2510,6 +2511,9 @@ function ToolPart(props: { part: SessionMessageAssistantTool; images?: boolean }
       <Match when={display() === "skill"}>
         <Skill {...toolprops} />
       </Match>
+      <Match when={display() === "todowrite"}>
+        <TodoWrite {...toolprops} />
+      </Match>
       <Match when={true}>
         <GenericTool {...toolprops} />
       </Match>
@@ -2604,6 +2608,31 @@ type ToolProps = {
   output?: string
   part: SessionMessageAssistantTool
 }
+
+function TodoWrite(props: ToolProps) {
+  const theme = useTheme()
+  const todos = createMemo(() => parseTodos(props.metadata.todos ?? props.input.todos))
+  return (
+    <Show
+      when={props.part.state.status === "completed"}
+      fallback={
+        <InlineTool icon="⚙" pending="Updating todos…" complete={false} part={props.part}>
+          Updating todos…
+        </InlineTool>
+      }
+    >
+      <BlockTool title="# Todos" part={props.part}>
+        <box>
+          <For each={todos()}>{(todo) => <TodoItem content={todo.content} status={todo.status} />}</For>
+          <Show when={todos().length === 0}>
+            <text fg={theme.text.muted}>Todo list cleared</text>
+          </Show>
+        </box>
+      </BlockTool>
+    </Show>
+  )
+}
+
 function GenericTool(props: ToolProps) {
   const theme = useTheme()
   const output = createMemo(() => props.output?.trim() ?? "")

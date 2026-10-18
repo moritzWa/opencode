@@ -34,9 +34,11 @@ const toolDisplays = new Set([
   "patch",
   "question",
   "skill",
+  "todowrite",
 ])
 
 export function toolDisplay(tool: string) {
+  if (tool === "TodoWrite") return "todowrite"
   const normalized = canonicalToolName(tool)
   return toolDisplays.has(normalized) ? normalized : "generic"
 }
