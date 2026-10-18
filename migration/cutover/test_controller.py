@@ -574,6 +574,21 @@ class CutoverTests(unittest.TestCase):
 
 
 class EntrySafetyTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "darwin", "macOS process exit race")
+    def test_identity_handles_exit_between_kernel_and_argv_reads(self):
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"], start_new_session=True)
+        class ExitingHost(Host):
+            def argv(self, pid):
+                child.terminate()
+                child.wait(timeout=5)
+                return super().argv(pid)
+        try:
+            self.assertIsNone(ExitingHost().identity(child.pid))
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=5)
+
     @unittest.skipUnless(sys.platform == "darwin", "APFS clone verification")
     def test_retained_clone_is_independent_of_import_target(self):
         with tempfile.TemporaryDirectory(prefix="cutover clone ") as directory:

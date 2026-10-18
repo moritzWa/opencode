@@ -81,6 +81,19 @@ requires a new arm plan.
 
 ## Dry preflight and arming
 
+For a one-time foreground cutover, run this from a separate terminal while the
+current dashboard is still open (the script handles its shutdown):
+
+```sh
+sh ~/Code/opencode/.claude/worktrees/v2-migration/migration/cutover-now.sh
+```
+
+This uses the shared heavy-job guard, creates a fresh plan, and executes the
+existing phases directly without installing a launchd job. It prints each phase
+and the final result in the terminal. Keep that terminal open until it finishes.
+Invoking it from an OpenCode tool is refused. The launchd procedure below remains
+available for explicitly managed background handoffs.
+
 Commands below are operator instructions, not actions performed during
 implementation. Set `PROD` and `SOURCE` to the production profile and this source
 directory. Run from an existing directory outside the repository-root Bun test

@@ -112,10 +112,23 @@ class Host:
             raise Refusal("Unexpected PROC_PIDTBSDINFO layout")
         if info.status == 5:
             return None
+        def vanished():
+            current = BsdInfo()
+            size = library.proc_pidinfo(int(pid), 3, 0, ctypes.byref(current), ctypes.sizeof(current))
+            return (size == 0 and ctypes.get_errno() in (0, 2, 3)) or (size == ctypes.sizeof(current) and current.status == 5)
         buffer = ctypes.create_string_buffer(4096)
         if library.proc_pidpath(int(pid), buffer, len(buffer)) <= 0:
+            if vanished():
+                return None
             raise Refusal("Unable to resolve the running executable")
-        argv = self.argv(pid)
+        try:
+            argv = self.argv(pid)
+        except Refusal:
+            # Exit may race the separate kernel executable/argv reads. An
+            # inaccessible but still-live process must remain a refusal.
+            if vanished():
+                return None
+            raise
         return {"pid": int(pid), "pgid": info.pgid, "uid": info.uid,
                 "start": f"{info.seconds}.{info.micros:06}",
                 "executable": os.fsdecode(buffer.value),
