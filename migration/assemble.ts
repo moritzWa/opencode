@@ -114,7 +114,7 @@ for (const [name, wrapper] of Object.entries(wrappers)) {
 }
 const port = (name: string) => path.join(config, "ports", name)
 settings.plugins = [
-  ...(!accountsOnly ? [{ package: port("todo-server"), options: { todoread: true, legacyDatabasePath: profile.environment.OPENCODE_DB } }] : []),
+  ...(!accountsOnly ? [{ package: port("todo-server"), options: { todoread: true, legacyDatabasePath: production ? path.join(root, "data/opencode/history-v1.db") : profile.environment.OPENCODE_DB } }] : []),
   { package: port("cursor") },
   {
     package: port("auth"),
