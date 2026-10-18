@@ -68,11 +68,18 @@ class Server:
         self.thread = threading.Thread(target=self.http.serve_forever, daemon=True)
         self.thread.start()
         self.closed = False
+        self.notices = {}
 
     def response(self, method, path, body):
         host = self.host
         if self.version == 1:
             if path == "/global/health": return {"healthy": True}, 200
+            if method == "POST" and path == f"/session/{MANAGER}/prompt_async":
+                self.notices[body["messageID"]] = body
+                return None, 204
+            if method == "GET" and path.startswith(f"/session/{MANAGER}/message/"):
+                item = self.notices.get(path.rsplit("/", 1)[-1])
+                return (item, 200) if item else ({}, 404)
             if path == "/session/status":
                 host.polls += 1
                 if host.append_latest and not host.appended:
@@ -216,6 +223,8 @@ class FakeHost(Host):
             result=subprocess.run([sys.executable, str(helper), str(s.profile), "--source", str(s.original)],
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=10)
             if result.returncode: raise AssertionError(result.stderr.decode())
+        elif tag == "retain-frozen":
+            shutil.copy2(argv[-2], argv[-1])
         elif tag == "offline-import":
             target = Path(read_private(s.profile / "profile.json")["environment"]["OPENCODE_DB"])
             with closing(sqlite3.connect(target)) as db:
@@ -385,9 +394,9 @@ class CutoverTests(unittest.TestCase):
         with self.assertRaises(Refusal): control.run()
         self.assertFalse(any(group == 200 for group, _ in self.h.signals))
         self.assertNotIn("backup", self.h.commands)
-        self.assertEqual([], self.h.old.posts)
+        self.assertEqual([f"/session/{MANAGER}/prompt_async"], [path for path, _ in self.h.old.posts])
 
-    def test_audit_failure_restores_exact_v1_without_any_prompt(self):
+    def test_audit_failure_restores_exact_v1_without_replaying_old_work(self):
         self.h.fail_tag = "history-audit"
         control = self.controller()
         with self.assertRaises(Refusal): control.run()
@@ -471,6 +480,21 @@ class CutoverTests(unittest.TestCase):
         self.assertEqual("handoff_admitted", control.journal["status"])
         self.assertTrue(released)
 
+    def test_verified_rollback_wakes_only_manager_once_for_diagnosis(self):
+        self.h.fail_tag = "history-audit"
+        control = self.controller()
+        with self.assertRaises(Refusal):
+            control.run()
+        self.assertEqual("rolled_back", control.journal["status"])
+        recovered = self.h.services[-1]
+        self.assertEqual(1, len(recovered.posts))
+        path, body = recovered.posts[0]
+        self.assertEqual(f"/session/{MANAGER}/prompt_async", path)
+        self.assertIn("NOT V2", body["parts"][0]["text"])
+        self.assertEqual("admitted", control.journal["resources"]["rollbackNotice"]["state"])
+        control.notify_rollback()
+        self.assertEqual(1, len(recovered.posts))
+
     def test_shutdown_reports_surviving_writer_without_signalling_it(self):
         original = self.h.writers
         self.h.writers = lambda database: ({999} if Path(database) == self.s.original and 100 not in self.h.identities else original(database))
@@ -550,6 +574,17 @@ class CutoverTests(unittest.TestCase):
 
 
 class EntrySafetyTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "darwin", "APFS clone verification")
+    def test_retained_clone_is_independent_of_import_target(self):
+        with tempfile.TemporaryDirectory(prefix="cutover clone ") as directory:
+            source = Path(directory) / "import target"
+            retained = Path(directory) / "retained snapshot"
+            source.write_bytes(b"original history")
+            Host().capture(["/bin/cp", "-c", str(source), str(retained)])
+            source.write_bytes(b"native import changes")
+            self.assertEqual(b"original history", retained.read_bytes())
+            self.assertNotEqual(source.stat().st_ino, retained.stat().st_ino)
+
     @unittest.skipUnless(sys.platform=="darwin","macOS kernel group verification")
     def test_readonly_timeout_reaps_its_private_descendants(self):
         host=Host()

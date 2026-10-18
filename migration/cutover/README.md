@@ -138,6 +138,10 @@ unrelated historical sessions do not receive invented settlement attestations.
 Stale deleted ownership is recorded separately and archived sessions remain in
 history. Visibility checks respect existing hidden-session state.
 
+The freeze phase allows 20 minutes for the measured 22 GB source backup and
+verification. Its immutable retained copy is an independent APFS copy-on-write
+clone, avoiding another full-size copy before native import.
+
 Authority transfers only after native runtime/lease/listener/API identity,
 installed binary hashes, dashboard source receipt, ownership, transcripts and
 model/default-path checks pass. The pending gate is then removed. The final
@@ -167,7 +171,10 @@ python3 ~/.claude/scripts/heavy-job.py --wait -- \
 
 - Before V2 authority: failure attempts the approved exact V1 binary rollback,
   verifies the actual recovered service and reopens the original dashboard flags.
-  It sends no V1 prompts. Repeated successful recovery verifies its receipt.
+   After verified automatic rollback, it admits one stable-ID manager-only V1
+   diagnostic prompt so the failure is investigated without waiting for the user.
+   It never resumes other tasks or replays interrupted tools. Repeated successful
+   recovery verifies its receipt.
 - Unknown identity, replaced lock, surviving unverified process group or an
   interrupted spawn/journal window leaves `failed_fenced`. Preserve the gate and
   original data; inspect private logs and actual process/port ownership before

@@ -309,7 +309,7 @@ class Controller:
             self.journal["status"] = "running"
             for phase in PHASES:
                 bound = {"wait_idle": self.s.idle_timeout + 10, "fence": 100, "lock": 45,
-                    "stop_v1": 120, "freeze": 300, "offline_import": 900, "audit": 900,
+                    "stop_v1": 120, "freeze": 1200, "offline_import": 900, "audit": 900,
                     "install_v2": self.s.command_timeout, "service": 60,
                     "install_dashboard": self.s.command_timeout, "adopt": 300,
                     "verify": 300, "authority": 20, "dashboard": self.s.dashboard_timeout + 10,
@@ -332,6 +332,8 @@ class Controller:
             self.save()
             if self.journal["authority"] != "v2":
                 self.rollback()
+                if self.journal["status"] == "rolled_back":
+                    self.notify_rollback()
             else:
                 # User work may now exist. Never restart V1 after this boundary.
                 self.journal["status"] = "v2_needs_recovery"
@@ -553,9 +555,10 @@ class Controller:
             counts = {table: source.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in ("session", "message", "part")}
             if counts != report["counts"] or source.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise Refusal("Published source backup differs from its receipt")
-            retained = self.backup / "frozen-v1.db"
-            with closing(sqlite3.connect(retained)) as copied:
-                source.backup(copied,pages=8192,progress=lambda *_:self.check_budget(),sleep=0.05)
+        retained = self.backup / "frozen-v1.db"
+        # A verified, checkpointed backup can be retained as an independent APFS
+        # copy-on-write clone; importing the target cannot mutate this snapshot.
+        self.command("retain-frozen", ["/bin/cp", "-c", target, retained], timeout=60)
         retained.chmod(0o400)
         if self.h.writers(self.s.original):
             raise Refusal("A source writer returned during backup")
@@ -968,6 +971,29 @@ class Controller:
         record = read_private(self.s.state / "server.json")
         if not identical(expected, self.h.identity(expected["pid"])) or record["pid"] != expected["pid"] or not self.h.listener(expected["pid"], record["port"]) or self.api(record, "GET", "/global/health").get("healthy") is not True:
             raise Refusal("Previously recovered V1 control plane no longer matches its receipt")
+
+    def notify_rollback(self):
+        """Wake only the manager for diagnosis, never replay interrupted work."""
+        message = "msg_" + hashlib.sha256((self.plan["runID"] + ":rollback-diagnostic").encode()).hexdigest()[:32]
+        query = "?" + urllib.parse.urlencode({"directory": self.s.manager_directory})
+        text = ("AUTOMATED CUTOVER ROLLBACK DIAGNOSTIC: V1 is still authoritative, NOT V2. "
+                "The cutover failed and exact V1 recovery was verified. This is a new manager-only diagnostic phase, "
+                "not a replay of interrupted tools or approval to resume other tasks. Read " + str(self.path) +
+                " and inspect the failed phase logs. Fix the actual failure, preserve the original history and "
+                "checkpointed goals, and continue the authorized migration with fresh preflight. Do not claim completion or blindly replay external actions.")
+        try:
+            self.verify_v1_recovered()
+            record = read_private(self.s.state / "server.json")
+            previous = self.h.api(record, "GET", f"/session/{self.s.manager_session}/message/{message}" + query)
+            if previous.get("_notFound"):
+                self.h.api(record, "POST", f"/session/{self.s.manager_session}/prompt_async" + query,
+                           {"messageID": message, "model": {"providerID": self.s.successor_model["providerID"],
+                                                          "modelID": self.s.successor_model["id"]},
+                            "parts": [{"type": "text", "text": text}]})
+            self.journal["resources"]["rollbackNotice"] = {"messageID": message, "state": "admitted"}
+        except (Refusal, OSError) as error:
+            self.journal["resources"]["rollbackNotice"] = {"messageID": message, "state": "uncertain", "errorType": type(error).__name__}
+        self.save()
 
 
 def arm(settings, host, config_path):
