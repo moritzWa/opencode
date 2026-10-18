@@ -12,6 +12,11 @@ title=$2
 shift 2
 brief=$*
 record=${AGENTVIEW_OPENCODE_SERVER_RECORD:-${XDG_STATE_HOME:-$HOME/.local/state}/agentview/opencode/server.json}
+if [ -z "${AGENTVIEW_OPENCODE_SERVER_RECORD:-}" ] && [ -s "$HOME/.local/state/install-latest/opencode-v2-ref" ]; then
+  profile=${INSTALL_LATEST_OPENCODE_V2_PROFILE:-$HOME/.local/share/opencode-v2}
+  [ ! -f "$profile/runtime/cutover.pending" ] || { echo "OpenCode migration is finishing; retry shortly" >&2; exit 75; }
+  record=$(python3 -c 'import json,pathlib,sys; p=json.load(open(sys.argv[1])); print(pathlib.Path(p["environment"]["XDG_STATE_HOME"])/"agentview/opencode/server.json")' "$profile/profile.json")
+fi
 [ -r "$record" ] || { echo "no agentview OpenCode server record at $record" >&2; exit 1; }
 
 python3 - "$record" "$dir" "$title" "$brief" <<'PY'

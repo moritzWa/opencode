@@ -17,6 +17,9 @@ const root = process.argv.slice(2).find((argument) => !argument.startsWith("--")
 const config = path.join(root, "config/opencode")
 const profilePath = path.join(root, "profile.json")
 const profile = await Bun.file(profilePath).json()
+// Keep compatible model preferences and working holds beside the dashboard's
+// existing state; configuration, credentials/cache and the native DB stay isolated.
+if (production) profile.environment.XDG_STATE_HOME = process.env.XDG_STATE_HOME ?? path.join(home, ".local/state")
 const artifacts = await Bun.file(path.join(import.meta.dir, "artifacts.json")).json()
 const expected = accountsOnly
   ? ["cursor-opencode-provider", "@local/opencode-subscription-auth"]

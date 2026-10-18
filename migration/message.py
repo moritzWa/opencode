@@ -13,6 +13,12 @@ import urllib.request
 def main():
     session, directory, text = sys.argv[1:]
     record_path = pathlib.Path(os.environ.get("AGENTVIEW_OPENCODE_SERVER_RECORD", "")) if os.environ.get("AGENTVIEW_OPENCODE_SERVER_RECORD") else pathlib.Path(os.environ.get("XDG_STATE_HOME", str(pathlib.Path.home() / ".local/state"))) / "agentview/opencode/server.json"
+    if not os.environ.get("AGENTVIEW_OPENCODE_SERVER_RECORD") and (pathlib.Path.home() / ".local/state/install-latest/opencode-v2-ref").is_file() and (pathlib.Path.home() / ".local/state/install-latest/opencode-v2-ref").read_text().strip():
+        profile = pathlib.Path(os.environ.get("INSTALL_LATEST_OPENCODE_V2_PROFILE", str(pathlib.Path.home() / ".local/share/opencode-v2")))
+        if (profile / "runtime/cutover.pending").exists():
+            raise SystemExit("OpenCode migration is finishing; retry shortly")
+        settings = json.loads((profile / "profile.json").read_text())
+        record_path = pathlib.Path(settings["environment"]["XDG_STATE_HOME"]) / "agentview/opencode/server.json"
     record = json.loads(record_path.read_text())
     credential = base64.b64encode(
         f'{record["username"]}:{record["password"]}'.encode()
