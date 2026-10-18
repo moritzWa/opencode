@@ -194,7 +194,7 @@ class FakeHost(Host):
             if "ls-remote" in argv: return self.source_sha + "\trefs/heads/v2-parity\n"
             if "rev-parse" in argv: return self.source_sha + "\n"
             return ""
-        if "--version" in argv: return "agentview 0.1.0" if "agentview" in argv[0] else self.native_version
+        if "--version" in argv: return "agentview 0.1.0" if "agentview" in argv[0] else "opencode v" + self.native_version
         if argv[1:] == ["debug", "paths", "db"]:
             return json.loads((self.s.profile / "profile.json").read_text())["environment"]["OPENCODE_DB"]
         if "--json" in argv:

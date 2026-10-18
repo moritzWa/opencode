@@ -599,7 +599,7 @@ class Controller:
         receipt = read_private(self.s.home / ".local/state/install-latest/opencode-dev.json", require_private=False)
         if receipt["commit"] != self.plan["preflight"]["sourceSha"][:10]:
             raise Refusal("Installed runtime is not the reviewed pushed source")
-        version = self.h.capture([executable, "--version"], env=self.s.native_env()).strip()
+        version = self.h.capture([executable, "--version"], env=self.s.native_env()).strip().removeprefix("opencode v")
         self.journal["resources"].update(nativeSha256=digest(executable), nativeVersion=version)
         self.save()
         return {"sha256": digest(executable), "version": version}
