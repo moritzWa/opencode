@@ -1,13 +1,18 @@
 /** @jsxImportSource @opentui/solid */
 import { RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
-import { expect, test } from "bun:test"
+import { afterEach, expect, test } from "bun:test"
+import { createEffect } from "solid-js"
 import { ConfigProvider } from "../src/config"
-import { ThemeProvider, useTheme, type ThemeSource } from "../src/context/theme"
+import { ThemeProvider, useTheme, useThemes } from "../src/context/theme"
 import { Selection } from "../src/util/selection"
+import { setSelectionDefaults } from "../src/util/selection-defaults"
 import { emptyThemeSource, tmpdir } from "./fixture/fixture"
+import { waitForHighlightedFrame } from "./fixture/frame"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
+
+afterEach(() => setSelectionDefaults(undefined))
 
 function contrast(a: RGBA, b: RGBA) {
   const luminance = (color: RGBA) => {
@@ -18,57 +23,68 @@ function contrast(a: RGBA, b: RGBA) {
   return (high + 0.05) / (low + 0.05)
 }
 
-function Block(props: { themed: boolean }) {
+function Blocks(props: { themed: boolean }) {
   const theme = useTheme()
+  const themes = useThemes()
+  createEffect(() => {
+    if (!props.themed) return
+    const colors = Selection.selectionColors(theme, theme.background.base)
+    setSelectionDefaults({ bg: colors.selectionBg, fg: colors.selectionFg })
+  })
   return (
     <box width="100%" height="100%" backgroundColor={theme.background.base}>
       <box paddingLeft={2} backgroundColor={theme.background.raised.base}>
-        <text
-          fg={theme.text.base}
-          {...(props.themed ? Selection.selectionColors(theme, theme.background.raised.base) : {})}
-        >
-          user message text here
-        </text>
+        <text fg={theme.text.base}>user message text here</text>
+      </box>
+      <box paddingLeft={3}>
+        <markdown
+          syntaxStyle={themes.currentSyntax()}
+          content={"- assistant bullet text here"}
+          streaming={false}
+          internalBlockMode="top-level"
+        />
       </box>
     </box>
   )
 }
 
-async function selected(
-  mode: "light" | "dark",
-  themed: boolean,
-  source: ThemeSource = emptyThemeSource,
-  name?: string,
-) {
+async function selectedRows(mode: "light" | "dark", themed: boolean) {
   await using temporary = await tmpdir()
   const app = await testRender(
     () => (
       <TestTuiContexts directory={temporary.path} paths={{ state: temporary.path }}>
-        <ConfigProvider config={createTuiResolvedConfig(name ? { theme: { name, mode } } : {})}>
-          <ThemeProvider mode={mode} source={source}>
-            <Block themed={themed} />
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <ThemeProvider mode={mode} source={emptyThemeSource}>
+            <Blocks themed={themed} />
           </ThemeProvider>
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width: 40, height: 4, kittyKeyboard: true },
+    { width: 40, height: 6, kittyKeyboard: true },
   )
   try {
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("user message"))
+    await waitForHighlightedFrame(app, (frame) => frame.includes("assistant bullet"))
     await app.mockMouse.drag(4, 0, 12, 0)
     await app.renderOnce()
-    const spans = (await app.captureSpans()).lines[0].spans
-    return spans.find((item) => item.text.includes("er mes"))!
+    const user = (await app.captureSpans()).lines[0].spans.find((item) => item.text.includes("er mes"))!
+    app.renderer.clearSelection()
+    await app.mockMouse.drag(6, 1, 14, 1)
+    await app.renderOnce()
+    const assistant = (await app.captureSpans()).lines[1].spans.find((item) => item.text.includes("ssistant"))!
+    return { user, assistant }
   } finally {
     app.renderer.destroy()
   }
 }
 
-test.each(["light", "dark"] as const)("selected text in a block stays readable (%s)", async (mode) => {
-  const plain = await selected(mode, false)
-  const themed = await selected(mode, true)
-  // The unthemed default paints black text on the ink color; the themed selection keeps contrast.
-  if (mode === "light") expect(contrast(plain.fg, plain.bg)).toBeLessThan(4.5)
-  expect(contrast(themed.fg, themed.bg)).toBeGreaterThan(4.5)
+test.each(["light", "dark"] as const)("selected text in any block stays readable (%s)", async (mode) => {
+  const themed = await selectedRows(mode, true)
+  expect(contrast(themed.user.fg, themed.user.bg)).toBeGreaterThan(4.5)
+  expect(contrast(themed.assistant.fg, themed.assistant.bg)).toBeGreaterThan(4.5)
+})
+
+test("the unthemed default is unreadable on the light theme", async () => {
+  const plain = await selectedRows("light", false)
+  expect(contrast(plain.user.fg, plain.user.bg)).toBeLessThan(4.5)
 })

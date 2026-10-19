@@ -11,6 +11,7 @@ import { LogProvider, type LogSink } from "./context/log"
 import { ExitProvider, useExit } from "./context/exit"
 import { EpilogueProvider } from "./context/epilogue"
 import { Selection } from "./util/selection"
+import { setSelectionDefaults } from "./util/selection-defaults"
 import {
   CliRenderEvents,
   createCliRenderer,
@@ -549,6 +550,11 @@ function App() {
           action: { label: "Open MCP servers", run: () => keymap.dispatch("mcp.list") },
         })
     }
+  })
+
+  createEffect(() => {
+    const colors = Selection.selectionColors(theme, theme.background.base)
+    setSelectionDefaults({ bg: colors.selectionBg, fg: colors.selectionFg })
   })
 
   const copyOnSelectEnabled = () =>

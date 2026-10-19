@@ -45,7 +45,6 @@ import type {
 } from "@opencode/client"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
-import { Selection } from "../../util/selection"
 import { FilePath } from "../../ui/file-path"
 import {
   canonicalToolName,
@@ -2328,11 +2327,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
           backgroundColor={hover() ? theme.decrease(theme.background.raised.base) : theme.background.raised.base}
           flexShrink={0}
         >
-          <text
-            ref={(node) => searchable.add(node)}
-            fg={theme.text.base}
-            {...Selection.selectionColors(theme, theme.background.raised.base)}
-          >
+          <text ref={(node) => searchable.add(node)} fg={theme.text.base}>
             {props.message.text}
           </text>
           <Show when={skills().length}>
