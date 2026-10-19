@@ -1,5 +1,6 @@
-import type { SelectionBehavior } from "@opentui/core"
+import type { RGBA, SelectionBehavior } from "@opentui/core"
 import type { ClipboardService } from "../context/clipboard"
+import { mix, readable } from "./color"
 
 type Toast = {
   show: (input: { message: string; variant: "info" | "success" | "warning" | "error" }) => void
@@ -30,6 +31,13 @@ type SelectionKeyEvent = {
   name: string
   preventDefault: () => void
   stopPropagation: () => void
+}
+
+// Text drawn over a block background has no background of its own, so the default selection inverts it to
+// black on its own ink color. Give such text an explicit tinted selection from the block's surface.
+export function selectionColors(theme: { text: { base: RGBA; formfield: { selected: RGBA } } }, surface: RGBA) {
+  const selectionBg = mix(surface, theme.text.formfield.selected, 0.35)
+  return { selectionBg, selectionFg: readable(selectionBg, { background: { base: surface }, text: theme.text }) }
 }
 
 export function copyOnSelectRelease(
