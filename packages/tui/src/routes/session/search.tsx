@@ -7,7 +7,7 @@ import {
   type LineInfo,
   type ScrollBoxRenderable,
   type WidthMethod,
-  type RGBA,
+  RGBA,
   type SyntaxStyle,
 } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
@@ -38,6 +38,49 @@ export type SearchMatch = {
   line: number
 }
 type SearchStyle = { match: { fg: RGBA; bg: RGBA }; current: { fg: RGBA; bg: RGBA } }
+
+type SearchPalette = {
+  background: { base: RGBA }
+  text: { base: RGBA; feedback: { warning: { base: RGBA } } }
+}
+
+// The formfield tokens have no distinct background (it equals the page), so matches were only
+// recolored text. Like browsers: a tinted wash for every match, a solid fill for the current one.
+export function searchStyle(theme: SearchPalette): SearchStyle {
+  const accent = theme.text.feedback.warning.base
+  const wash = mix(theme.background.base, accent, 0.35)
+  return {
+    match: { fg: readable(wash, theme), bg: wash },
+    current: { fg: readable(accent, theme), bg: accent },
+  }
+}
+
+function mix(from: RGBA, to: RGBA, amount: number) {
+  return RGBA.fromValues(
+    from.r + (to.r - from.r) * amount,
+    from.g + (to.g - from.g) * amount,
+    from.b + (to.b - from.b) * amount,
+    1,
+  )
+}
+
+// Prefer the theme's own text colors; a mid-tone accent can leave both under 4.5:1, so fall back to black or white.
+function readable(bg: RGBA, theme: SearchPalette) {
+  const contrast = (color: RGBA) => {
+    const [high, low] = [luminance(bg), luminance(color)].sort((a, b) => b - a)
+    return (high + 0.05) / (low + 0.05)
+  }
+  const candidates = [theme.text.base, theme.background.base, RGBA.fromInts(0, 0, 0), RGBA.fromInts(255, 255, 255)]
+  return (
+    candidates.find((color) => contrast(color) >= 4.5) ??
+    candidates.reduce((a, b) => (contrast(b) > contrast(a) ? b : a))
+  )
+}
+
+function luminance(color: RGBA) {
+  const linear = (channel: number) => (channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+  return 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+}
 
 export function findMatches(root: Renderable, query: string, widthMethod: WidthMethod): SearchMatch[] {
   if (!query) return []
@@ -106,10 +149,7 @@ export function createSessionSearch(input: {
   const [query, setQuery] = createSignal("")
   const [matches, setMatches] = createSignal<SearchMatch[]>([])
   const [current, setCurrent] = createSignal(-1)
-  const style = createMemo(() => ({
-    match: { fg: theme.text.formfield.selected, bg: theme.background.formfield.selected },
-    current: { fg: theme.text.formfield.focused, bg: theme.background.formfield.focused },
-  }))
+  const style = createMemo(() => searchStyle(theme))
 
   function rescan(viewport = false) {
     const scroll = input.scroll()
@@ -227,6 +267,8 @@ export function SessionSearchBar(props: { search: ReturnType<typeof createSessio
         onInput={props.search.search}
         placeholder="Search messages"
         placeholderColor={theme.text.muted}
+        textColor={theme.text.base}
+        focusedTextColor={theme.text.base}
         cursorColor={theme.text.base}
         cursorStyle={config.data.cursor}
         flexGrow={1}
