@@ -25,6 +25,7 @@ type Renderer = {
 
 type SelectionKeyEvent = {
   ctrl?: boolean
+  super?: boolean
   baseCode?: number
   name: string
   preventDefault: () => void
@@ -74,8 +75,8 @@ export function handleSelectionKey(
   const focus = renderer.currentFocusedEditor
   const editing = focus?.hasSelection() && selection.selectedRenderables.includes(focus)
 
-  // Kitty can report a non-Latin key name with a Latin base-layout C.
-  if (event.ctrl && (event.name === "c" || event.baseCode === 99 || event.baseCode === 67)) {
+  // Kitty can report a non-Latin key name with a Latin base-layout C. Cmd+C reaches the app as super+c.
+  if ((event.ctrl || event.super) && (event.name === "c" || event.baseCode === 99 || event.baseCode === 67)) {
     if ((copyOnSelect && !editing) || !copy(renderer, toast, clipboard)) {
       renderer.clearSelection()
       return

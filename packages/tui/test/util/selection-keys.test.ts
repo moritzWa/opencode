@@ -12,6 +12,7 @@ async function setup(copyOnSelect = false) {
     useThread: false,
     exitOnCtrlC: false,
     useKittyKeyboard: {},
+    kittyKeyboard: true,
     clock,
   })
   const writes: string[] = []
@@ -43,6 +44,21 @@ async function terminal(copyOnSelect = false) {
   await app.renderOnce()
   return { ...app, terminal, input }
 }
+
+test("Cmd+C copies the selection in manual mode and passes through with no selection", async () => {
+  const app = await terminal()
+  try {
+    app.mockInput.pressKey("c", { super: true })
+    expect(app.writes).toEqual([])
+
+    await app.mockMouse.drag(6, 0, 9, 0)
+    app.mockInput.pressKey("c", { super: true })
+    expect(app.writes).toEqual(["beta"])
+    expect(app.renderer.getSelection()?.getSelectedText()).toBe("beta")
+  } finally {
+    app.renderer.destroy()
+  }
+})
 
 test("terminal selections retain repeated copies until Escape or typing dismisses them", async () => {
   const app = await terminal()
