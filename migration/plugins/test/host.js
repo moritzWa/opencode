@@ -63,6 +63,9 @@ export function host(directory, options = {}, defaultSession = "ses_fixture") {
       switchModel: async ({ sessionID, model }) => { sessions.get(sessionID).model = model },
       wait: async () => {},
     },
+    agent: {
+      get: async ({ agentID }) => ({ location: { directory }, data: { id: agentID, ...(options.agentModels?.[agentID] ? { model: options.agentModels[agentID] } : {}) } }),
+    },
     permission: { reply: async () => {} },
     model: { list: async () => ({ location: { directory }, data: [{ providerID: "openai", id: "fixture", capabilities: { temperature: true } }] }) },
     message: { list: async ({ sessionID }) => ({ data: history.get(sessionID) ?? [], cursor: {} }) },

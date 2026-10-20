@@ -125,7 +125,7 @@ try {
   assert.equal(legacyEvents({ type: "session.created", data: { sessionID: "ses_x", location: { directory: home } } })[0].properties.info.id, "ses_x")
   assert.equal(legacyMessage({ id: "msg_x", type: "assistant", content: [{ type: "reasoning", text: "r" }, { type: "text", text: "same" }] }, "ses_x").parts[1].id, "1")
   assert.equal(legacyHistory([{ id: "msg_x", type: "assistant", content: [{ type: "text", text: "done" }] }, { id: "msg_idle", type: "idle", outcome: "succeeded" }], "ses_x").at(-1).info.role, "assistant")
-  const strict = host(home, {}, "ses_selector_parent")
+  const strict = host(home, { agentModels: { "opencode-memory-recall": { providerID: "openai", id: "gpt-6-luna" } } }, "ses_selector_parent")
   let selectorClient
   const closeStrict = await activate(strict.context, [(input) => { selectorClient = input.client; return { config: (cfg) => { Object.assign(cfg.agent, buildAgentDefaults({ recall: "opencode-memory-recall", extract: "opencode-memory-extract", dream: "opencode-memory-dream" })) } } }])
   const owned = []
@@ -140,6 +140,7 @@ try {
     assert.deepEqual(strict.structured[0].input.schema, SELECT_MEMORIES_FORMAT.schema)
     assert.match(strict.structured[0].input.prompt, /fixture memory useful for parity/)
     assert.equal(strict.structured[0].session.agent, "opencode-memory-recall")
+    assert.deepEqual(strict.structured[0].session.model, { providerID: "openai", id: "gpt-6-luna" }, "the selector fork must run on the recall agent's model, not the global default")
     assert(strict.structured[0].options.signal instanceof AbortSignal)
     assert.equal(strict.structured[0].draft.system.filter((part) => part.text.includes("You are selecting memories")).length, 1)
     assert.deepEqual(strict.structured[0].draft.tools, {})

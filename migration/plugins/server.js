@@ -10,7 +10,7 @@ import { ClaudeHooks } from "./legacy/plugins/claude-hooks.js"
 import { Monitor } from "./legacy/plugins/monitor.js"
 import { SpawnedSessions } from "./legacy/plugins/spawned-sessions.js"
 import { WorktreePlugin } from "./legacy/plugins/worktree.js"
-import { legacyEvents, legacyHistory, legacySession, makeClient, textContent } from "./bridge.js"
+import { legacyEvents, legacyHistory, legacySession, makeClient, selectAgent, textContent } from "./bridge.js"
 import { prepareMemory } from "./memory.js"
 
 export async function activate(ctx, factories) {
@@ -41,8 +41,7 @@ export async function activate(ctx, factories) {
       if (input.body.format) {
         if (input.body.format.type !== "json_schema") throw new Error("Unsupported memory selector format")
         if (typeof ctx.session.generateObject !== "function") throw new Error("Strict memory recall requires the V2 session.generateObject API")
-        if (input.body.agent) await ctx.session.switchAgent({ sessionID: input.path.id, agent: input.body.agent })
-        if (input.body.model) await ctx.session.switchModel({ sessionID: input.path.id, model: { providerID: input.body.model.providerID, id: input.body.model.id ?? input.body.model.modelID } })
+        await selectAgent(ctx, input.path.id, input.body)
         const result = await ctx.session.generateObject({
           sessionID: input.path.id,
           prompt: input.body.parts.filter((part) => part.type === "text").map((part) => part.text).join("\n\n"),

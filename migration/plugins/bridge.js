@@ -91,8 +91,7 @@ export function makeClient(ctx) {
   const inject = async (input, wait = false) => {
     const body = input.body ?? input
     const id = sessionID(input)
-    if (body.agent) await ctx.session.switchAgent({ sessionID: id, agent: body.agent })
-    if (body.model) await ctx.session.switchModel({ sessionID: id, model: { providerID: body.model.providerID, id: body.model.modelID ?? body.model.id } })
+    await selectAgent(ctx, id, body)
     const synthetic = !wait || body.parts?.every((part) => part.synthetic)
     const metadata = body.parts?.find((part) => part.metadata)?.metadata
     const request = {
@@ -143,4 +142,13 @@ export function makeClient(ctx) {
       if (!ctx.options.quiet) console.error(JSON.stringify({ plugin: "moritz-parity", ...input.body }))
     } },
   }
+}
+
+/** V1 ran a prompt naming an agent on that agent's configured model. V2's
+ * switchAgent leaves the Session model alone, so a fork created for a hidden
+ * agent would otherwise run on the global default model. */
+export async function selectAgent(ctx, sessionID, body) {
+  if (body.agent) await ctx.session.switchAgent({ sessionID, agent: body.agent })
+  const model = body.model ?? (body.agent ? (await ctx.agent?.get({ agentID: body.agent }))?.data?.model : undefined)
+  if (model) await ctx.session.switchModel({ sessionID, model: { providerID: model.providerID, id: model.modelID ?? model.id, ...(model.variant ? { variant: model.variant } : {}) } })
 }
