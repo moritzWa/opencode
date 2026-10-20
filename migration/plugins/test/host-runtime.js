@@ -106,6 +106,17 @@ try {
     block.add(body)
     block.add(new TextRenderable(fixture.renderer, { content: "fixture diagnostic remains visible" }))
     transcript.add(block)
+    // Native shell tools nest the command several boxes below the transcript
+    // row; only the tool's own command text may be adopted, never the rows.
+    const nest = (...nodes) => {
+      const box = new BoxRenderable(fixture.renderer, { flexDirection: "column" })
+      nodes.forEach((node) => box.add(node))
+      return box
+    }
+    const command = new TextRenderable(fixture.renderer, { content: "$ echo shell fixture" })
+    const output = new TextRenderable(fixture.renderer, { content: "shell output folds" })
+    transcript.add(nest(nest(nest(nest(command, output)))))
+    transcript.add(nest(new TextRenderable(fixture.renderer, { content: "answer line one\nanswer line two\nanswer line three" })))
     fixture.renderer.root.add(transcript)
     const deadline = Date.now() + 5000
     while (!fixture.captureCharFrame().includes("8 lines") && Date.now() < deadline) { await Bun.sleep(20); await fixture.renderOnce() }
@@ -114,6 +125,9 @@ try {
     assert(frame.includes("8 lines"), `fold stats missing in native nested header: ${frame}`)
     assert(frame.includes("diagnostic remains visible"))
     assert(!frame.includes("seven"))
+    assert(frame.includes("$ echo shell fixture"), `shell command must stay visible: ${frame}`)
+    assert(!frame.includes("shell output folds"), `shell output must fold: ${frame}`)
+    assert(frame.includes("answer line three"), `answer below a shell tool must not fold: ${frame}`)
     keys.find((command) => command.id === "fold_diffs.toggle").run()
     await fixture.renderOnce()
     assert(fixture.captureCharFrame().includes("seven"), "native fold command must restore body")

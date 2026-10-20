@@ -24,6 +24,11 @@ for (const [kind, names] of Object.entries({
         loader: "js",
         contents: ('import { TextRenderable } from "@opentui/core"\n' + await Bun.file(args.path).text())
           .replace('return typeof value === "string" ? value : undefined', 'return typeof value === "string" ? value : children(node).map(plain).filter(Boolean).join(" ") || undefined')
+          // Joined descendant text is only for nested path headings. A shell
+          // command must be its own text node, and a heading must not hold a
+          // diff, or a transcript row or the whole transcript matches and folds.
+          .replace('const text = plain(inner[0])', 'const text = inner[0]?.plainText')
+          .replace('  const head = plain(kids[0])', '  if (bulk(kids[0]).length) return\n  const head = plain(kids[0])')
           .replace('node.stickyScroll === true &&\n    node.stickyStart === "bottom"', '((typeof node.id === "string" && /^session:.*:transcript$/.test(node.id)) || (node.stickyScroll === true && node.stickyStart === "bottom"))')
           .replace('const known = new WeakMap()', 'const known = new WeakMap()\n    const owned = new Set()')
           .replace('      const head = kids[0]\n      const state', '      const head = kids[0]\n      const titleNode = typeof head.plainText === "string" ? head : new TextRenderable(api.renderer, { content: "", fg: api.theme.current.textMuted })\n      if (titleNode !== head) head.add(titleNode)\n      const state')

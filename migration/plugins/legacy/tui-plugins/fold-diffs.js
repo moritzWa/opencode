@@ -35,7 +35,7 @@ function shellCommand(block) {
     const inner = children(child);
     if (!inner.length)
       continue;
-    const text = plain(inner[0]);
+    const text = inner[0]?.plainText;
     if (typeof text !== "string" || !text.startsWith(PROMPT))
       return;
     return { node: inner[0], text, box: child };
@@ -76,6 +76,8 @@ function findTranscript(node) {
 function blockTitle(node) {
   const kids = children(node);
   if (kids.length < 2)
+    return;
+  if (bulk(kids[0]).length)
     return;
   const head = plain(kids[0]);
   if (!head)
@@ -348,4 +350,4 @@ export {
   fold_diffs_default as default
 };
 
-//# debugId=8A1FADD6463BA44064756E2164756E21
+//# debugId=941BB864FFF3BE2B64756E2164756E21
