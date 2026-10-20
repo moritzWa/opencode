@@ -35,7 +35,7 @@ export async function activate(ctx, factories) {
   // V1 maintenance requests can supply a per-call system/tool sandbox. Keep it
   // scoped to the fork, never the shared parent or unrelated session.
   const original = client.session.prompt
-  const ladder = modelLadder(ctx.options.memory?.models)
+  const ladder = modelLadder(ctx.options.memoryModels)
   client.session.prompt = (input) => ladder(input, attempt)
   const attempt = async (input) => {
     overrides.set(input.path.id, input.body)
