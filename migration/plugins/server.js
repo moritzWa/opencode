@@ -35,7 +35,9 @@ export async function activate(ctx, factories) {
   // V1 maintenance requests can supply a per-call system/tool sandbox. Keep it
   // scoped to the fork, never the shared parent or unrelated session.
   const original = client.session.prompt
-  client.session.prompt = async (input) => {
+  const ladder = modelLadder(ctx.options.memory?.models)
+  client.session.prompt = (input) => ladder(input, attempt)
+  const attempt = async (input) => {
     overrides.set(input.path.id, input.body)
     try {
       if (input.body.format) {
@@ -141,10 +143,22 @@ export async function activate(ctx, factories) {
       for (const text of output.system) input.system.push({ type: "text", text })
     }
     for (const name of ["context", "generate"]) registrations.push(await ctx.session.hook(name, transform(name)))
+    const owners = new Map()
+    const owns = async (event, p) => {
+      const location = event.location ?? p.location ?? p.info?.location
+      if (location?.directory) return location.directory === ctx.location.directory
+      if (!p.sessionID) return true
+      if (event.type === "session.moved") owners.delete(p.sessionID)
+      if (!owners.has(p.sessionID)) owners.set(p.sessionID, await ctx.session.get({ sessionID: p.sessionID }).then((session) => session?.location?.directory, () => undefined))
+      return owners.get(p.sessionID) === ctx.location.directory
+    }
     events = (async () => {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
         const p = event.data ?? event.properties ?? event
         if (event.type === "session.deleted") await ctx.storage.remove(`memory.${p.sessionID}`)
+        // Execution events carry no Location, so every Location's instance of
+        // this plugin receives them. Only the Session's own Location reacts.
+        else if (!(await owns(event, p))) continue
         const updated = ["session.renamed", "session.moved", "session.metadata.updated"].includes(event.type)
           ? [{ type: "session.updated", properties: { info: legacySession(await ctx.session.get({ sessionID: p.sessionID })) } }]
           : legacyEvents(event)
@@ -189,4 +203,40 @@ export function createMemory(input, options) {
     ? createMemoryPlugin({ ...process.env, CLAUDE_CONFIG_DIR: options.memoryConfigDir }, homedir())
     : MemoryPlugin
   return plugin(input, { ...options.memory, autodream: { enabled: false } })
+}
+
+const LADDER_COOLDOWN_MS = 30 * 60 * 1000
+const exhausted = new Map()
+
+/** Memory forks try each configured model in order. A model whose plan is out
+ * of quota (or rate limited, or signed out) is skipped for a while, so one
+ * exhausted subscription does not fail every memory run. */
+export function modelLadder(models, now = Date.now, cooling = exhausted) {
+  return async (input, attempt) => {
+    const rungs = input.body.model ? [] : (models?.[input.body.agent] ?? []).filter((model) => (cooling.get(key(model)) ?? 0) <= now())
+    if (!rungs.length) return attempt(input)
+    let failure
+    for (const model of rungs) {
+      const result = await attempt({ ...input, body: { ...input.body, model } }).then((value) => ({ value }), (error) => ({ error }))
+      const error = result.error ?? result.value?.data?.info?.error
+      if (!error || !exhaustedError(error)) {
+        if (result.error) throw result.error
+        return result.value
+      }
+      cooling.set(key(model), now() + LADDER_COOLDOWN_MS)
+      failure = result
+    }
+    if (failure.error) throw failure.error
+    return failure.value
+  }
+}
+
+function key(model) {
+  return `${model.providerID}/${model.id ?? model.modelID}`
+}
+
+function exhaustedError(error) {
+  const type = String(error?.type ?? error?.name ?? error?.reason?._tag ?? error?._tag ?? "")
+  const text = `${type} ${error?.message ?? error?.data?.message ?? ""} ${error?.reason?.message ?? ""}`
+  return /quota|rate.?limit|usage limit|QuotaExceeded|RateLimit|provider\.auth|unauthori[sz]ed/i.test(text)
 }
