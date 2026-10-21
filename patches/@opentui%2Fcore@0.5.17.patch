@@ -1,0 +1,44 @@
+diff --git a/index.bun.js b/index.bun.js
+index 993bfd1d0a3019fd8df4b32b26cec6c5a0bf38ba..1e838b061e0573180301726a7a16be5a2f12f817 100644
+--- a/index.bun.js
++++ b/index.bun.js
+@@ -12633,7 +12633,7 @@ class MarkdownRenderable extends Renderable2 {
+       fg: this._fg,
+       bg: this._bg,
+       conceal: this._concealCode,
+-      drawUnstyledText: !this._streaming,
++      drawUnstyledText: true,
+       streaming: this._streaming,
+       treeSitterClient: this._treeSitterClient,
+       width: "100%",
+@@ -12681,7 +12681,7 @@ class MarkdownRenderable extends Renderable2 {
+     renderable.fg = this._fg;
+     renderable.bg = this._bg;
+     renderable.conceal = this._concealCode;
+-    renderable.drawUnstyledText = !this._streaming;
++    renderable.drawUnstyledText = true;
+     renderable.streaming = this._streaming;
+     renderable.content = token.text;
+     renderable.marginBottom = marginBottom;
+diff --git a/index.node.js b/index.node.js
+index cea2b1a4efa2d1c68282ec557860d6e0bf4cce28..1b4bb02c3743243f38144a89fa777054e1655f0b 100644
+--- a/index.node.js
++++ b/index.node.js
+@@ -12632,7 +12632,7 @@ class MarkdownRenderable extends Renderable2 {
+       fg: this._fg,
+       bg: this._bg,
+       conceal: this._concealCode,
+-      drawUnstyledText: !this._streaming,
++      drawUnstyledText: true,
+       streaming: this._streaming,
+       treeSitterClient: this._treeSitterClient,
+       width: "100%",
+@@ -12680,7 +12680,7 @@ class MarkdownRenderable extends Renderable2 {
+     renderable.fg = this._fg;
+     renderable.bg = this._bg;
+     renderable.conceal = this._concealCode;
+-    renderable.drawUnstyledText = !this._streaming;
++    renderable.drawUnstyledText = true;
+     renderable.streaming = this._streaming;
+     renderable.content = token.text;
+     renderable.marginBottom = marginBottom;
