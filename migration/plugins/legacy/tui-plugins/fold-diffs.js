@@ -1,5 +1,5 @@
 // @bun
-// ../../../../../../../.config/opencode/tui-plugins/fold-diffs.js
+// ../../../../.config/opencode/tui-plugins/fold-diffs.js
 import { TextRenderable } from "@opentui/core";
 var DEFAULTS = {
   lines: 0,
@@ -59,6 +59,23 @@ function bulk(node, found = []) {
 }
 function isTranscript(node) {
   return typeof node?.scrollTo === "function" && typeof node?.scrollHeight === "number" && (typeof node.id === "string" && /^session:.*:transcript$/.test(node.id) || node.stickyScroll === true && node.stickyStart === "bottom");
+}
+function topNode(content, y) {
+  let node = content;
+  for (;; ) {
+    const next = children(node).find((child) => !child.isDestroyed && child.visible !== false && child.y + child.height > y);
+    if (!next)
+      return node === content ? undefined : node;
+    if (next.y >= y)
+      return next;
+    node = next;
+  }
+}
+function contains(ancestor, node) {
+  for (let current = node;current; current = current.parent)
+    if (current === ancestor)
+      return true;
+  return false;
 }
 function findTranscript(node) {
   if (!node || node.isDestroyed)
@@ -142,8 +159,10 @@ var fold_diffs_default = {
       cached = findTranscript(api.renderer.root);
       return cached;
     }
+    let touched;
     function apply(state, fold) {
       state.folded = fold;
+      touched?.push(state);
       state.body.forEach((node, index) => {
         try {
           if (state.hide && index > 0) {
@@ -265,11 +284,13 @@ var fold_diffs_default = {
       const box = transcript();
       if (!box)
         return;
-      for (const block of scan(box, [], shell)) {
-        if (known.has(block))
-          continue;
-        adopt(block);
-      }
+      hold(box, () => {
+        for (const block of scan(box, [], shell)) {
+          if (known.has(block))
+            continue;
+          adopt(block);
+        }
+      });
     }
     function all(fold) {
       folding = fold;
@@ -277,14 +298,44 @@ var fold_diffs_default = {
       if (!box)
         return 0;
       let count = 0;
-      for (const block of scan(box, [], shell)) {
-        const state = known.get(block);
-        if (!state || state.folded === fold)
-          continue;
-        apply(state, fold);
-        count++;
-      }
+      hold(box, () => {
+        for (const block of scan(box, [], shell)) {
+          const state = known.get(block);
+          if (!state || state.folded === fold)
+            continue;
+          apply(state, fold);
+          count++;
+        }
+      });
       return count;
+    }
+    function hold(box, change) {
+      const content = box.content;
+      const viewport = box.viewport;
+      const bottom = box.scrollTop >= box.scrollHeight - (viewport?.height ?? 0) - 1;
+      if (!content || !viewport || typeof content.once !== "function" || bottom)
+        return change();
+      const found = topNode(content, viewport.y);
+      if (typeof found?.getLayoutNode !== "function")
+        return change();
+      const top = (node) => node === content || !node.parent ? 0 : node.getLayoutNode().getComputedTop() + top(node.parent);
+      touched = [];
+      try {
+        change();
+      } finally {
+        const folded = touched;
+        touched = undefined;
+        if (!folded.length)
+          return;
+        const anchor = folded.find((state) => state.body.some((node) => contains(node, found)))?.block ?? found;
+        const offset = top(anchor) - box.scrollTop;
+        const restore = () => {
+          if (!anchor.isDestroyed && !box.isDestroyed)
+            box.scrollTo(top(anchor) - offset);
+        };
+        content.once("resize", restore);
+        setTimeout(() => content.off("resize", restore), 250);
+      }
     }
     let pending;
     function schedule() {
@@ -350,4 +401,4 @@ export {
   fold_diffs_default as default
 };
 
-//# debugId=941BB864FFF3BE2B64756E2164756E21
+//# debugId=0B70CE1EBFBDF6B364756E2164756E21

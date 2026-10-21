@@ -131,6 +131,18 @@ try {
     keys.find((command) => command.id === "fold_diffs.toggle").run()
     await fixture.renderOnce()
     assert(fixture.captureCharFrame().includes("seven"), "native fold command must restore body")
+    // Folding blocks above a scrolled-up reader must not slide the view.
+    transcript.add(nest(new TextRenderable(fixture.renderer, { content: Array.from({ length: 40 }, (_, index) => `history row ${String(index).padStart(2, "0")}`).join("\n") })))
+    await fixture.renderOnce()
+    transcript.scrollTo(transcript.scrollHeight - transcript.viewport.height - 10)
+    await fixture.renderOnce()
+    const row = (frame) => frame.split("\n").findIndex((line) => line.includes("history row 22"))
+    const before = row(fixture.captureCharFrame())
+    assert(before > 0, `fixture row must be on screen: ${fixture.captureCharFrame()}`)
+    keys.find((command) => command.id === "fold_diffs.toggle").run()
+    await fixture.renderOnce()
+    await fixture.renderOnce()
+    assert.equal(row(fixture.captureCharFrame()), before, `folding above the view moved it: ${fixture.captureCharFrame()}`)
   }
   // Load view through the same runtime resolver and prove its markdown class
   // is the host class, including the real per-word onHighlight callback.

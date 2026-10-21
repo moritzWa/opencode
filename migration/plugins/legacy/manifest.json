@@ -33,7 +33,7 @@
   },
   {
     "source": "tui-plugins/fold-diffs.js",
-    "sha256": "6a0056f33c56d373173c01aad61880eebab53222a02c0bfab1198ddf3721f495"
+    "sha256": "8b6c7cda0c703d196bcec7eb2096c529e67c27566117447972d481be7417ba0d"
   },
   {
     "source": "tui-plugins/pr-footer.js",
