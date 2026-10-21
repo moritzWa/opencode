@@ -11,6 +11,88 @@ import { render } from "@opentui/solid"
 import { createRoot, createSignal } from "solid-js"
 import { createMarkdownRenderer } from "../src/plugin/markdown"
 
+// Fences must have a visible fallback before highlighting, including languages
+// such as `text` that have no syntax parser. These tests inspect actual cells.
+for (const streaming of [false, true]) {
+  for (const [name, content] of [
+    ["top-level", 'Before\n\n```text\nrm -rf "/Volumes/Data/Library/Bluetooth/"*\n```\n\nAfter'],
+    [
+      "numbered",
+      '3. Paste only this line:\n\n   ```text\n   rm -rf "/Volumes/Data/Library/Bluetooth/"*\n   ```\n\n4. After',
+    ],
+    [
+      "bulleted",
+      '- Paste only this line:\n\n  ```text\n  rm -rf "/Volumes/Data/Library/Bluetooth/"*\n  ```\n\n- After',
+    ],
+  ]) {
+    test(`${name} fences remain visible with streaming=${streaming}`, async () => {
+      const output = await createTestRenderer({ width: 80, height: 18, remote: true, useThread: false })
+      await render(() => {
+        const renderNode = createMarkdownRenderer(() => [])
+        return (
+          <markdown
+            syntaxStyle={SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } })}
+            renderNode={renderNode()}
+            content={content}
+            streaming={streaming}
+            internalBlockMode="top-level"
+          />
+        )
+      }, output.renderer)
+      try {
+        output.renderer.start()
+        await output.waitForFrame((frame) => frame.includes("After"))
+        expect(output.captureCharFrame()).toContain('rm -rf "/Volumes/Data/Library/Bluetooth/"*')
+      } finally {
+        output.renderer.destroy()
+      }
+    })
+  }
+}
+
+test("list fences stay visible through streamed edits, restyling, and completion", async () => {
+  const output = await createTestRenderer({ width: 80, height: 24, remote: true, useThread: false })
+  const [content, setContent] = createSignal("1. Paste `this`:\n\n   ```text\n   first")
+  const [streaming, setStreaming] = createSignal(true)
+  const [style, setStyle] = createSignal(SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } }))
+  await render(() => {
+    const renderNode = createMarkdownRenderer(() => [])
+    return (
+      <markdown
+        syntaxStyle={style()}
+        renderNode={renderNode()}
+        content={content()}
+        streaming={streaming()}
+        internalBlockMode="top-level"
+      />
+    )
+  }, output.renderer)
+  try {
+    output.renderer.start()
+    await output.renderOnce()
+    expect(output.captureCharFrame()).toContain("first")
+    setContent("1. Paste `this`:\n\n   ```text\n   first second\n   ```\n\n2. After")
+    await output.renderOnce()
+    expect(output.captureCharFrame()).toContain("first second")
+    setStyle(SyntaxStyle.fromStyles({ default: { fg: "#aabbff" } }))
+    await output.renderOnce()
+    expect(output.captureCharFrame()).toContain("first second")
+    setStreaming(false)
+    await output.renderOnce()
+    expect(output.captureCharFrame()).toContain("first second")
+    expect(output.captureCharFrame()).toContain("2. After")
+
+    for (const language of ["", "unknown-language", "bash", "javascript"]) {
+      setStreaming(true)
+      setContent(`- Outer\n  - Inner\n\n    \`\`\`${language}\n    visible_code()\n    \`\`\`\n\n- After`)
+      await output.renderOnce()
+      expect(output.captureCharFrame()).toContain("visible_code()")
+    }
+  } finally {
+    output.renderer.destroy()
+  }
+})
+
 test("unrelated plugin toggles preserve mounted Markdown blocks", async () => {
   const output = await createTestRenderer({ width: 80, height: 12, remote: true, useThread: false })
   const handler: MarkdownCodeBlockRenderer = () =>
