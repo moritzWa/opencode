@@ -84,6 +84,62 @@ test.each(["light", "dark"] as const)("selected text in any block stays readable
   expect(contrast(themed.assistant.fg, themed.assistant.bg)).toBeGreaterThan(4.5)
 })
 
+function Input(props: { themed: boolean }) {
+  const theme = useTheme()
+  createEffect(() => {
+    if (!props.themed) return
+    const colors = Selection.selectionColors(theme, theme.background.base)
+    setSelectionDefaults({ bg: colors.selectionBg, fg: colors.selectionFg })
+  })
+  return (
+    <box width="100%" height="100%" backgroundColor={theme.background.base}>
+      <box paddingLeft={2} backgroundColor={theme.background.raised.base}>
+        <textarea initialValue="prompt input text here" textColor={theme.text.base} focusedTextColor={theme.text.base} focused />
+      </box>
+    </box>
+  )
+}
+
+async function selectedInput(mode: "light" | "dark", themed: boolean) {
+  await using temporary = await tmpdir()
+  const app = await testRender(
+    () => (
+      <TestTuiContexts directory={temporary.path} paths={{ state: temporary.path }}>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <ThemeProvider mode={mode} source={emptyThemeSource}>
+            <Input themed={themed} />
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 40, height: 4, kittyKeyboard: true },
+  )
+  try {
+    app.renderer.start()
+    await waitForHighlightedFrame(app, (frame) => frame.includes("prompt input"))
+    await app.mockMouse.drag(4, 0, 12, 0)
+    await app.renderOnce()
+    const spans = (await app.captureSpans()).lines[0].spans
+    return {
+      selected: spans.find((item) => item.text.includes("ompt in"))!,
+      surface: spans.find((item) => item.text.includes("here"))!.bg,
+    }
+  } finally {
+    app.renderer.destroy()
+  }
+}
+
+test.each(["light", "dark"] as const)("selected prompt input text is a readable tint, not a block (%s)", async (mode) => {
+  const input = await selectedInput(mode, true)
+  expect(contrast(input.selected.fg, input.selected.bg)).toBeGreaterThan(4.5)
+  expect(contrast(input.selected.bg, input.surface)).toBeLessThan(3)
+})
+
+test("the unthemed prompt input selection is a solid block on the light theme", async () => {
+  const input = await selectedInput("light", false)
+  expect(contrast(input.selected.bg, input.surface)).toBeGreaterThan(10)
+})
+
 test("the unthemed default is unreadable on the light theme", async () => {
   const plain = await selectedRows("light", false)
   expect(contrast(plain.user.fg, plain.user.bg)).toBeLessThan(4.5)
