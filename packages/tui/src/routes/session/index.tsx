@@ -1961,6 +1961,11 @@ function AssistantFooter(props: { message: SessionMessageAssistant }) {
           <Show when={config.data.session.tps && tokensPerSecond()}>
             {(value) => <span style={{ fg: theme.text.muted }}> · {value().toFixed(1)} tok/s</span>}
           </Show>
+          <Show
+            when={props.message.time.completed && ctx.terminal.width >= 60 ? props.message.time.completed : undefined}
+          >
+            {(completed) => <span style={{ fg: theme.text.muted }}> · {Locale.todayTimeOrDayTime(completed())}</span>}
+          </Show>
           <Show when={interrupted()}>
             <span style={{ fg: theme.text.muted }}> · interrupted</span>
           </Show>

@@ -16,6 +16,18 @@ export function datetime(input: number): string {
   return `${localTime} · ${localDate}`
 }
 
+export function todayTimeOrDayTime(input: number): string {
+  const date = new Date(input)
+  const now = new Date()
+  if (date.toDateString() === now.toDateString()) return time(input)
+  const day = date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: date.getFullYear() === now.getFullYear() ? undefined : "numeric",
+  })
+  return `${time(input)}, ${day}`
+}
+
 export function number(num: number): string {
   // 999950+ would round to "1000.0K"
   if (num >= 999950) {
