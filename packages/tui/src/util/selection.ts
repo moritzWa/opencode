@@ -12,6 +12,10 @@ type FocusableSelectionTarget = {
   getClipboardText?: (text: string) => string
 }
 
+type EditorSelectionTarget = FocusableSelectionTarget & {
+  deleteSelection: () => boolean
+}
+
 type Renderer = {
   getSelection: () => {
     getSelectedText: () => string
@@ -21,7 +25,7 @@ type Renderer = {
   } | null
   clearSelection: () => void
   currentFocusedRenderable?: FocusableSelectionTarget | null
-  currentFocusedEditor?: FocusableSelectionTarget | null
+  currentFocusedEditor?: EditorSelectionTarget | null
 }
 
 type SelectionKeyEvent = {
@@ -90,6 +94,15 @@ export function handleSelectionKey(
       return
     }
 
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
+
+  // Terminals have no native cut, so Cmd+X reaches the app as super+x.
+  if (focus && editing && event.super && event.name === "x") {
+    copy(renderer, toast, clipboard)
+    focus.deleteSelection()
     event.preventDefault()
     event.stopPropagation()
     return
