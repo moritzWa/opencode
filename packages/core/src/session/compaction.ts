@@ -259,7 +259,13 @@ export const layer = Layer.effect(
       // An encrypted native window estimates as nothing, so wait for a response to measure it.
       const measured = messages.findLastIndex((message) => hasMeasuredPrompt(message, context.model.ref))
       if (measured < messages.findLastIndex(SessionProviderContext.isCheckpoint)) return false
-      return estimateContext(context) >= ceiling
+      if (estimateContext(context) < ceiling) return false
+      // A provider can count history it kept on its own side (a resumed server-side conversation) that a local
+      // summary no longer holds. Compacting again cannot shrink that, so every turn would compact again. When the
+      // history we would send is under the ceiling, only a provider overflow error can still trigger compaction.
+      const previous = previousCompaction(messages)
+      if (previous && !SessionProviderContext.isCheckpoint(previous)) return estimateTranscript(context) >= ceiling
+      return true
     }
 
     /**
@@ -892,6 +898,15 @@ export const recentUserMessages = (
 export const estimateContext = (context: SessionContext.Loaded) => {
   const prompt = estimatePrompt(context)
   return prompt.measured + prompt.estimated
+}
+
+/** The size of the history as this session would send it, ignoring what the provider reported. */
+const estimateTranscript = (context: SessionContext.Loaded) => {
+  const base = transcript(context, context.messages)
+  const sent = SessionModelRequest.boundImages(
+    SessionModelRequest.unsupportedParts(base.messages, context.model.capabilities),
+  )
+  return estimateRequest({ system: base.system, tools: context.tools.definitions, messages: sent })
 }
 
 /** The prompt size: `measured` is what the provider reported at the latest response, `estimated` is the text since. */

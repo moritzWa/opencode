@@ -3121,7 +3121,7 @@ describe("SessionRunnerLLM", () => {
       TestLLM.text("## Objective\n- Preserve the updated task", "text-summary-2"),
       TestLLM.text("Continued again", "text-final-2"),
     )
-    yield* s.runPrompt("Newest exact request ".repeat(180))
+    yield* s.runPrompt("Newest exact request ".repeat(540))
 
     expect(s.requests).toHaveLength(2)
     expect(userTexts(s.requests[0])[0]).toContain("<summary>\n## Objective\n- Preserve the task\n</summary>")
@@ -3130,7 +3130,7 @@ describe("SessionRunnerLLM", () => {
     expect((yield* store.context(sessionID))[0]).toMatchObject({
       type: "compaction",
       summary: "## Objective\n- Preserve the updated task",
-      recent: `[User]: ${"Newest exact request ".repeat(180)}`,
+      recent: `[User]: ${"Newest exact request ".repeat(540)}`,
     })
   })
 

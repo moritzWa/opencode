@@ -320,6 +320,20 @@ it.effect("auto compaction estimates current content against the buffered prompt
       time: { created: 0, completed: 0 },
     })
     expect(yield* due({ ...grown, messages: [checkpoint] })).toBe(false)
+
+    // A provider that counts history it kept on its own side reports a full window after every summary. The
+    // history we would send is small, so another compaction cannot help and must not repeat forever.
+    const summary = { ...checkpoint, summary: "short" }
+    expect(yield* due({ ...grown, messages: [summary, assistant] })).toBe(false)
+    expect(yield* due({ ...grown, messages: [summary, assistant, { ...assistant, id: SessionMessage.ID.create() }] })).toBe(
+      false,
+    )
+    // Content that really grew since the summary still compacts.
+    const huge = SessionMessage.AssistantTool.make({
+      ...tool,
+      state: { status: "completed", input: {}, content: [{ type: "text", text: "x".repeat(400_000) }] },
+    })
+    expect(yield* due({ ...grown, messages: [summary, { ...assistant, content: [huge] }] })).toBe(true)
   }),
 )
 
