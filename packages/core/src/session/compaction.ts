@@ -90,6 +90,15 @@ type Streamed = {
   readonly providerState?: SessionMessage.ProviderState
 }
 
+/** Automatic compactions in a row that follow no user message and at most one assistant message. */
+const MAX_FUTILE_COMPACTIONS = 3
+const COMPACTING_IN_A_LOOP: Failure = {
+  error: {
+    type: "compaction.looping",
+    message:
+      "Compaction ran several times in a row without any progress in between, so it was stopped. The provider may be counting history the summary no longer holds.",
+  },
+}
 const NOTHING_TO_COMPACT: Failure = { error: { type: "compaction.unavailable", message: "Nothing to compact yet" } }
 /** After each "too long" rejection, the next attempt aims at this share of the first rejected request's size. */
 const SHRINK_STEPS = [0.7, 0.5, 0.35]
@@ -202,6 +211,9 @@ export const layer = Layer.effect(
       }),
     })
     const started = new Set<SessionContext.Loaded["session"]["id"]>()
+    // A backstop that does not rely on any token estimate: compaction that keeps coming due with nothing new
+    // since the last one cannot be helping, whatever the reason.
+    const futileCompactions = new Map<SessionContext.Loaded["session"]["id"], number>()
 
     const compact = Effect.fn("SessionCompaction.compact")(function* (trigger: Trigger): Effect.fn.Return<Outcome> {
       const settings = state.get()
@@ -211,6 +223,14 @@ export const layer = Layer.effect(
       if (trigger.reason !== "manual" && !settings.auto) return { status: "skipped" }
       if (trigger.reason === "auto" && !due(context, calculateCeiling(context.model.limit, settings.buffer)))
         return { status: "skipped" }
+      if (trigger.reason === "auto") {
+        const futile = madeProgress(context) ? 0 : (futileCompactions.get(context.session.id) ?? 0) + 1
+        futileCompactions.set(context.session.id, futile)
+        if (futile >= MAX_FUTILE_COMPACTIONS) {
+          futileCompactions.delete(context.session.id)
+          return yield* publish(trigger, COMPACTING_IN_A_LOOP)
+        }
+      }
       const native = context.model.compaction?.type === "native"
       const agent = native ? undefined : yield* agents.get(Agent.ID.make("compaction"))
       const model =
@@ -709,6 +729,12 @@ export const node = makeLocationNode({
   layer,
   deps: [Agent.node, Bus.node, Database.node, llmClient, Model.node, SessionModelRequest.node, SessionRunnerModel.node],
 })
+
+/** Anything since the previous compaction beyond one assistant message counts as progress. */
+const madeProgress = (context: SessionContext.Loaded) => {
+  const since = previousCompaction(context.messages) ? context.messages.slice(1) : context.messages
+  return since.some((message) => message.type === "user") || since.filter((message) => message.type === "assistant").length > 1
+}
 
 /** History loads from the latest completed compaction, so a previous one is always the first message. */
 const previousCompaction = (messages: ReadonlyArray<SessionMessage.Info>) => {

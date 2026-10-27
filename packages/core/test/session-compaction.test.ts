@@ -403,6 +403,48 @@ it.effect("falls back from a pinned compaction model without leaving an orphan c
   }),
 )
 
+it.effect("stops automatic compaction after repeated compactions with no progress between them", () =>
+  Effect.gen(function* () {
+    const compaction = yield* SessionCompaction.Service
+    const session = yield* insertSession(Session.ID.make("ses_compaction_loop"))
+    const summary = Schema.decodeUnknownSync(SessionMessage.CompactionCompleted)({
+      id: SessionMessage.ID.create(),
+      type: "compaction",
+      status: "completed",
+      reason: "auto",
+      summary: "x".repeat(800_000),
+      recent: "",
+      time: { created: 0, completed: 0 },
+    })
+    const assistant = Schema.decodeUnknownSync(SessionMessage.Assistant)({
+      id: SessionMessage.ID.create(),
+      type: "assistant",
+      agent: Agent.defaultID,
+      model: { id: "summary-model", providerID: "test" },
+      content: [{ type: "text", text: "Done" }],
+      tokens: { input: 190_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: 0, completed: 0 },
+    })
+    const stuck = loaded(session, [summary, assistant])
+    const failure = (outcome: SessionCompaction.Outcome) => (outcome.status === "failed" ? outcome.error.type : undefined)
+
+    expect(failure(yield* compaction.compact({ reason: "auto", context: stuck }))).not.toBe("compaction.looping")
+    expect(failure(yield* compaction.compact({ reason: "auto", context: stuck }))).not.toBe("compaction.looping")
+    expect(failure(yield* compaction.compact({ reason: "auto", context: stuck }))).toBe("compaction.looping")
+
+    // A user message since the last compaction is progress and starts the count again.
+    const user = SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Keep going",
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    expect(failure(yield* compaction.compact({ reason: "auto", context: loaded(session, [summary, user, assistant]) }))).not.toBe(
+      "compaction.looping",
+    )
+  }),
+)
+
 /** Opens the compaction's message as the runner does when it delivers `/compact`, then compacts. */
 const compactManually = (
   session: Session.Info,
