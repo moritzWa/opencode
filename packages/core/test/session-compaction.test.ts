@@ -61,7 +61,7 @@ const cost = [
 const client = Layer.mock(LLMClient.Service)({
   stream: (request: LLMRequest) => {
     requests.push(request)
-    if (request.model.id === "unavailable-summarizer")
+    if (String(request.model.id).startsWith("unavailable"))
       return Stream.fail(new AIError({ reason: new AuthenticationError({ message: "Pinned summarizer unavailable" }) }))
     return Stream.make(
       LLMEvent.textDelta({ id: "summary", text: "## Objective\n- manual summary" }),
@@ -107,11 +107,11 @@ const it = testEffect(
       Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
       SessionRunnerModel.node.replace(
         Layer.succeed(SessionRunnerModel.Service, {
-          resolve: () =>
+          resolve: (input) =>
             Effect.succeed(
               SessionRunnerModel.resolved(
                 LanguageModel.make({
-                  id: "unavailable-summarizer",
+                  id: input.model?.id ?? "unavailable-summarizer",
                   provider: "test",
                   route: OpenAIChat.route,
                 }),
@@ -400,6 +400,44 @@ it.effect("falls back from a pinned compaction model without leaving an orphan c
     const messages = yield* store.context(session.id)
     expect(messages.filter((message) => message.type === "compaction")).toHaveLength(1)
     expect(messages.at(-1)).toMatchObject({ type: "compaction", status: "completed", model: resolved.ref })
+  }),
+)
+
+it.effect("walks the pinned fallback models and skips an exhausted one for later compactions", () =>
+  Effect.gen(function* () {
+    requests = []
+    const agents = yield* Agent.Service
+    yield* agents.transform((editor) =>
+      editor.update(Agent.ID.make("compaction"), (agent) => {
+        agent.model = { id: Model.ID.make("unavailable-first"), providerID: Provider.ID.make("test") }
+        agent.fallbackModels = [
+          { id: Model.ID.make("unavailable-second"), providerID: Provider.ID.make("test") },
+          { id: Model.ID.make("ladder-third"), providerID: Provider.ID.make("test") },
+        ]
+      }),
+    )
+    const session = yield* insertSession(Session.ID.make("ses_compaction_ladder"))
+    const compaction = yield* SessionCompaction.Service
+    const user = SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Summarize my work",
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    expect(yield* compaction.compact({ reason: "overflow", context: loaded(session, [user]) })).toEqual({
+      status: "completed",
+    })
+    expect(requests.map((request) => String(request.model.id))).toEqual([
+      "unavailable-first",
+      "unavailable-second",
+      "ladder-third",
+    ])
+
+    requests = []
+    expect(yield* compaction.compact({ reason: "overflow", context: loaded(session, [user]) })).toEqual({
+      status: "completed",
+    })
+    expect(requests.map((request) => String(request.model.id))).toEqual(["ladder-third"])
   }),
 )
 

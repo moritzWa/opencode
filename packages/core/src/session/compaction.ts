@@ -18,7 +18,7 @@ import type { StreamOptions } from "@opencode/ai/route"
 import type { SessionCompactionResult } from "@opencode/plugin/effect/session"
 import type { SessionError } from "@opencode/schema/session-error"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
-import { Context, Effect, Layer, Result, Stream } from "effect"
+import { Clock, Context, Effect, Layer, Result, Stream } from "effect"
 import { Agent } from "../agent.js"
 import { Bus } from "../bus.js"
 import { Database } from "../database/database.js"
@@ -99,6 +99,10 @@ const COMPACTING_IN_A_LOOP: Failure = {
       "Compaction ran several times in a row without any progress in between, so it was stopped. The provider may be counting history the summary no longer holds.",
   },
 }
+/** Provider failures that mean a model's subscription is unusable for a while, not that this request was bad. */
+const EXHAUSTED_ERRORS = new Set(["provider.rate-limit", "provider.auth", "provider.quota"])
+const EXHAUSTED_COOLDOWN = 30 * 60 * 1000
+const modelKey = (ref: Model.Ref) => `${ref.providerID}/${ref.id}`
 const NOTHING_TO_COMPACT: Failure = { error: { type: "compaction.unavailable", message: "Nothing to compact yet" } }
 /** After each "too long" rejection, the next attempt aims at this share of the first rejected request's size. */
 const SHRINK_STEPS = [0.7, 0.5, 0.35]
@@ -214,6 +218,7 @@ export const layer = Layer.effect(
     // A backstop that does not rely on any token estimate: compaction that keeps coming due with nothing new
     // since the last one cannot be helping, whatever the reason.
     const futileCompactions = new Map<SessionContext.Loaded["session"]["id"], number>()
+    const exhausted = new Map<string, number>()
 
     const compact = Effect.fn("SessionCompaction.compact")(function* (trigger: Trigger): Effect.fn.Return<Outcome> {
       const settings = state.get()
@@ -233,13 +238,6 @@ export const layer = Layer.effect(
       }
       const native = context.model.compaction?.type === "native"
       const agent = native ? undefined : yield* agents.get(Agent.ID.make("compaction"))
-      const model =
-        (agent?.model &&
-          (yield* models
-            .resolve({ ...context.session, model: agent.model }, catalog.available)
-            .pipe(Effect.orElseSucceed(() => undefined)))) ??
-        context.model
-      const selected = model === context.model ? trigger : { ...trigger, context: { ...context, model } }
       const run = (target: Trigger) => {
         const ceiling = calculateCeiling(target.context.model.limit, settings.buffer)
         // An unknown window still needs a bounded summary request.
@@ -252,22 +250,46 @@ export const layer = Layer.effect(
             : cap
         return native ? compactNatively(target, budget, settings.keep) : summarize(target, budget, settings.keep)
       }
-      return yield* run(selected).pipe(
-        Effect.matchEffect({
-          onSuccess: (result) => publish(selected, result),
-          onFailure: (failure) => {
-            if (selected === trigger || native || failure.error.type === "compaction.unavailable")
-              return publish(selected, failure)
-            // A pinned summarizer can be unavailable while the session model still works. Try it
-            // once with its own token budget, without creating another compaction marker.
-            return run(trigger).pipe(
+      // Every model the agent names is tried in order, skipping any that recently ran out of quota or auth.
+      // The session's own model is always the last rung.
+      const ladder = (refs: readonly Model.Ref[]): Effect.Effect<Outcome> =>
+        Effect.gen(function* () {
+          const ref = refs[0]
+          if (ref === undefined)
+            return yield* run(trigger).pipe(
               Effect.matchEffect({
                 onSuccess: (result) => publish(trigger, result),
-                onFailure: (fallback) => publish(trigger, fallback),
+                onFailure: (failure) => publish(trigger, failure),
               }),
             )
-          },
-        }),
+          const rest = refs.slice(1)
+          const model = yield* models
+            .resolve({ ...context.session, model: ref }, catalog.available)
+            .pipe(Effect.orElseSucceed(() => undefined))
+          if (model === undefined) return yield* ladder(rest)
+          const selected = { ...trigger, context: { ...context, model } }
+          return yield* run(selected).pipe(
+            Effect.matchEffect({
+              onSuccess: (result) => publish(selected, result),
+              onFailure: (failure) => {
+                if (failure.error.type === "compaction.unavailable") return publish(selected, failure)
+                return Clock.currentTimeMillis.pipe(
+                  Effect.tap((now) =>
+                    Effect.sync(() => {
+                      if (EXHAUSTED_ERRORS.has(failure.error.type)) exhausted.set(modelKey(ref), now + EXHAUSTED_COOLDOWN)
+                    }),
+                  ),
+                  Effect.flatMap(() => ladder(rest)),
+                )
+              },
+            }),
+          )
+        })
+      const now = yield* Clock.currentTimeMillis
+      return yield* ladder(
+        [agent?.model, ...(agent?.fallbackModels ?? [])].filter(
+          (ref): ref is Model.Ref => ref !== undefined && (exhausted.get(modelKey(ref)) ?? 0) <= now,
+        ),
       )
     })
 

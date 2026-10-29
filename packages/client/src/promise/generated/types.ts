@@ -2121,6 +2121,7 @@ export type AgentInfo = {
   id: AgentID
   name: string
   model?: ModelRef
+  fallbackModels?: Array<ModelRef>
   request: ProviderRequest
   system?: string
   description?: string
@@ -2205,6 +2206,7 @@ export type ConfigEntry =
         agents?: {
           [x: string]: {
             model?: string | { providerID: string; model: string; variant?: string }
+            fallbackModels?: Array<string | { providerID: string; model: string; variant?: string }>
             request?: { headers?: { [x: string]: string }; body?: { [x: string]: JsonValue } }
             system?: string
             description?: string
