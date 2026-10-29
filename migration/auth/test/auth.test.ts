@@ -162,3 +162,11 @@ test("real gateway applies subscription identity/billing/auth and reverses fragm
   expect(await response.text()).toContain('"name": "read"')
   expect(calls).toBe(1)
 })
+
+test("auth outages walk the personal ladder, Cursor before OpenAI", () => {
+  const ladder = [{ providerID: "openai", id: "gpt-6.1-sol" }, { providerID: "cursor", id: "claude-sonnet-5-5" }]
+  const input = { failure: { category: "refresh_throttle", reason: "rate_limit_error", exhausted: true } as const, failed: { providerID: "anthropic", id: "claude-opus-5-5" }, available: ladder }
+  expect(fallback(input)).toEqual(ladder[1])
+  expect(fallback({ ...input, tried: ["cursor/claude-sonnet-5-5"] })).toEqual(ladder[0])
+  expect(fallback({ ...input, tried: ["cursor/claude-sonnet-5-5", "openai/gpt-6.1-sol"] })).toBeUndefined()
+})

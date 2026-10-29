@@ -1,6 +1,6 @@
 {
   "name": "@local/opencode-subscription-auth",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "type": "module",
   "exports": { ".": "./server.ts", "./server": "./server.ts", "./policy": "./src/policy.ts", "./auth": "./src/auth.ts" },

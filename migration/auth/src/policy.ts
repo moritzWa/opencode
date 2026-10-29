@@ -15,15 +15,16 @@ export function isWork(directory?: string, code = join(homedir(), "Code")) {
   return ["arca", "science-website"].some((repo) => rel.split(sep)[0] === repo || rel.split(sep)[0]!.startsWith(`${repo}-`))
 }
 
-const personal = ["gpt-6.1-sol", "gpt-5.6-sol", "gpt-6-astra", "gpt-5.5"].map((id) => ({ providerID: "openai", id }))
+// Ordered ladder: each rung is tried only if available and not already tried; OpenAI is last because its credits can run out.
+const personal = [{ providerID: "cursor", id: "claude-sonnet-5-5" }, ...["gpt-6.1-sol", "gpt-5.6-sol", "gpt-6-astra", "gpt-5.5"].map((id) => ({ providerID: "openai", id }))]
 
 export function fallback(input: { failure: Failure; failed: ModelRef; directory?: string; available: readonly ModelRef[]; tried?: readonly string[] }): ModelRef | undefined {
   const auth = input.failure.category.startsWith("refresh_") && input.failure.exhausted
   if (!auth && !["model_quota", "capacity"].includes(input.failure.category)) return
   const work = isWork(input.directory)
-  // Auth outages always use the personal Sol subscription. Work quota recovery
+  // Auth outages walk the personal ladder. Work quota recovery
   // retains the established same-Claude-on-Cursor billing route.
-  const candidates = auth ? personal.slice(0, 1) : work ? [
+  const candidates = auth ? personal : work ? [
     ...(input.failed.providerID === "anthropic" ? [{ providerID: "cursor", id: `${input.failed.id.replace(/-1m$/, "")}-1m` }, { providerID: "cursor", id: input.failed.id }] : []),
     { providerID: "cursor", id: "claude-opus-5" }, { providerID: "anthropic", id: "claude-opus-5-5" },
   ] : personal
