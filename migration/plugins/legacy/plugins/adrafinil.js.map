@@ -2,9 +2,9 @@
   "version": 3,
   "sources": ["../../../../../../../../../.config/opencode/plugins/adrafinil.ts"],
   "sourcesContent": [
-    "export const Adrafinil = async ({ $ }) => {\n  return {\n    event: async ({ event }) => {\n      if (event.type === \"session.created\") await $`\"/Applications/Adrafinil.app/Contents/Helpers/adrafinil\" acquire ${event.properties.info.id} --tool opencode`\n    }\n  }\n}"
+    "const adrafinil = \"/Applications/Adrafinil.app/Contents/Helpers/adrafinil\"\n\n// Hold only while a turn runs. One long-lived server hosts every chat, so\n// Adrafinil never sees a process exit; the ttl is the backstop for a missed idle.\nexport const Adrafinil = async ({ $ }) => {\n  const held = new Set<string>()\n  const release = async (id: string) => {\n    if (!held.delete(id)) return\n    await $`${adrafinil} release ${id}`.quiet().nothrow()\n  }\n  return {\n    event: async ({ event }) => {\n      if (event.type === \"session.deleted\") return release(event.properties.info.id)\n      if (event.type !== \"session.status\") return\n      const id = event.properties.sessionID\n      const status = event.properties.status.type\n      if (status === \"idle\") return release(id)\n      if (status !== \"busy\" || held.has(id)) return\n      held.add(id)\n      await $`${adrafinil} acquire ${id} --tool opencode --ttl 3600`.quiet().nothrow()\n    },\n  }\n}\n"
   ],
-  "mappings": ";;AAAO,IAAM,YAAY,SAAS,QAAQ;AAAA,EACxC,OAAO;AAAA,IACL,OAAO,SAAS,YAAY;AAAA,MAC1B,IAAI,MAAM,SAAS;AAAA,QAAmB,MAAM,qEAAqE,MAAM,WAAW,KAAK;AAAA;AAAA,EAE3I;AAAA;",
-  "debugId": "53FC0770CE70413064756E2164756E21",
+  "mappings": ";;AAAA,IAAM,YAAY;AAIX,IAAM,YAAY,SAAS,QAAQ;AAAA,EACxC,MAAM,OAAO,IAAI;AAAA,EACjB,MAAM,UAAU,OAAO,OAAe;AAAA,IACpC,IAAI,CAAC,KAAK,OAAO,EAAE;AAAA,MAAG;AAAA,IACtB,MAAM,IAAI,qBAAqB,KAAK,MAAM,EAAE,QAAQ;AAAA;AAAA,EAEtD,OAAO;AAAA,IACL,OAAO,SAAS,YAAY;AAAA,MAC1B,IAAI,MAAM,SAAS;AAAA,QAAmB,OAAO,QAAQ,MAAM,WAAW,KAAK,EAAE;AAAA,MAC7E,IAAI,MAAM,SAAS;AAAA,QAAkB;AAAA,MACrC,MAAM,KAAK,MAAM,WAAW;AAAA,MAC5B,MAAM,SAAS,MAAM,WAAW,OAAO;AAAA,MACvC,IAAI,WAAW;AAAA,QAAQ,OAAO,QAAQ,EAAE;AAAA,MACxC,IAAI,WAAW,UAAU,KAAK,IAAI,EAAE;AAAA,QAAG;AAAA,MACvC,KAAK,IAAI,EAAE;AAAA,MACX,MAAM,IAAI,qBAAqB,gCAAgC,MAAM,EAAE,QAAQ;AAAA;AAAA,EAEnF;AAAA;",
+  "debugId": "A62D492DD77679D664756E2164756E21",
   "names": []
 }
