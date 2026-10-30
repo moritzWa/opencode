@@ -53,10 +53,16 @@ gateway, which installs the actual subscription bearer token and removes API key
   Missing/unreadable directory is personal. `arcafoo` is personal.
 - On explicit model-quota/capacity evidence, work Claude first tries the matching
   Cursor 1M model, then the unmodified model, then legacy work candidates.
-  Personal requests use the existing OpenAI subscription candidate order, led by
-  `openai/gpt-6.1-sol`. Personal requests can never select Cursor.
-- Auth outages use exactly `openai/gpt-6.1-sol`, for both personal and work requests:
-  this is a personal subscription route and does not add work billing exposure.
+  Personal requests walk one ladder: `cursor/claude-sonnet-5-5`, then the OpenAI
+  subscription order led by `openai/gpt-6.1-sol`. OpenAI is last because its credits
+  can run out (Oct 2026: the old Sol-only target stranded chats with "The usage limit
+  has been reached").
+- Auth outages walk the same ladder, for both personal and work requests. Each rung is
+  used only if available and not already tried.
+- Deliberate divergence from the original port (2026-10-29, branch `auth-fallback`):
+  the Sol-only auth fallback and "personal can never select Cursor" were dropped.
+  Re-assembly must use an artifact built from this source, never an older tgz in
+  `artifacts.json`.
 - Auxiliary title/compaction/generate requests do not initiate primary recovery.
   Child Sessions are not detached and revived by the plugin.
 - Default model selection remains the configuration owner's decision.

@@ -10,7 +10,7 @@ import { Diagnostics } from "./diagnostics.ts"
 import { legacy, accountStore } from "./legacy.ts"
 import { gateway } from "./gateway.ts"
 import { ClaudeFailure, readFailure } from "./failure.ts"
-import { boundRetry, fallback } from "./policy.ts"
+import { boundRetry, cooldown, fallback } from "./policy.ts"
 
 // Structural forward contract for the coordinated core seam. Once integrated,
 // this is exactly SessionHooks["recovery"]; no V1 event guesses are used.
@@ -45,6 +45,7 @@ export const SubscriptionPlugin: Plugin = {
         return auth.credentials(signal, force)
       },
     }, transport: modules.transport, diagnostics })
+    const cooling = cooldown()
     const registrations: Registration[] = []
     const keep = async (pending: Promise<Registration>) => { const registration = await pending; registrations.push(registration) }
     const cleanup = async () => {
@@ -80,7 +81,8 @@ export const SubscriptionPlugin: Plugin = {
         if (!detail) return
         const available = await context.model.list({}).then((result) => result.data).catch(() => [])
         const session = await context.session.get({ sessionID: event.sessionID }).catch(() => undefined)
-        const model = fallback({ failure: detail, failed: event.model, directory: session?.location.directory, available })
+        cooling.mark({ failure: detail, failed: event.model })
+        const model = fallback({ failure: detail, failed: event.model, directory: session?.location.directory, available, tried: cooling.active() })
         if (!model) { diagnostics.record(detail, "stop", event.sessionID); return }
         const selected = available.find((item) => item.providerID === model.providerID && item.id === model.id)
         if (!selected) return

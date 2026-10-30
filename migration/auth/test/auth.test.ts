@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { SubscriptionAuth } from "../src/auth.ts"
 import { ClaudeFailure, classify, readFailure, retryAfter } from "../src/failure.ts"
 import { Diagnostics } from "../src/diagnostics.ts"
-import { fallback, isWork } from "../src/policy.ts"
+import { cooldown, fallback, isWork } from "../src/policy.ts"
 import { legacy } from "../src/legacy.ts"
 import { gateway } from "../src/gateway.ts"
 
@@ -161,4 +161,23 @@ test("real gateway applies subscription identity/billing/auth and reverses fragm
   expect(response.status).toBe(200)
   expect(await response.text()).toContain('"name": "read"')
   expect(calls).toBe(1)
+})
+
+test("auth outages walk the personal ladder, Cursor before OpenAI", () => {
+  const ladder = [{ providerID: "openai", id: "gpt-6.1-sol" }, { providerID: "cursor", id: "claude-sonnet-5-5" }]
+  const input = { failure: { category: "refresh_throttle", reason: "rate_limit_error", exhausted: true } as const, failed: { providerID: "anthropic", id: "claude-opus-5-5" }, available: ladder }
+  expect(fallback(input)).toEqual(ladder[1])
+  expect(fallback({ ...input, tried: ["cursor/claude-sonnet-5-5"] })).toEqual(ladder[0])
+  expect(fallback({ ...input, tried: ["cursor/claude-sonnet-5-5", "openai/gpt-6.1-sol"] })).toBeUndefined()
+})
+
+test("a provider that just ran out is skipped for 30 minutes", () => {
+  const ladder = [{ providerID: "openai", id: "gpt-6.1-sol" }, { providerID: "cursor", id: "claude-sonnet-5-5" }]
+  const cooling = cooldown()
+  const quota = { category: "model_quota", reason: "usage_limit_reached" } as const
+  cooling.mark({ failure: quota, failed: { providerID: "openai", id: "gpt-6.1-sol" }, now: 0 })
+  cooling.mark({ failure: { category: "refresh_throttle", reason: "rate_limit_error", exhausted: true }, failed: { providerID: "anthropic", id: "claude-opus-5-5" }, now: 0 })
+  expect(cooling.active(1000)).toEqual(["openai/*", "anthropic/*"])
+  expect(fallback({ failure: quota, failed: { providerID: "anthropic", id: "claude-opus-5-5" }, available: ladder, tried: cooling.active(1000) })).toEqual(ladder[1])
+  expect(cooling.active(30 * 60 * 1000 + 1)).toEqual([])
 })

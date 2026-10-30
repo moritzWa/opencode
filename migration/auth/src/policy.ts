@@ -15,17 +15,35 @@ export function isWork(directory?: string, code = join(homedir(), "Code")) {
   return ["arca", "science-website"].some((repo) => rel.split(sep)[0] === repo || rel.split(sep)[0]!.startsWith(`${repo}-`))
 }
 
-const personal = ["gpt-6.1-sol", "gpt-5.6-sol", "gpt-6-astra", "gpt-5.5"].map((id) => ({ providerID: "openai", id }))
+// Ordered ladder: each rung is tried only if available and not already tried; OpenAI is last because its credits can run out.
+const personal = [{ providerID: "cursor", id: "claude-sonnet-5-5" }, ...["gpt-6.1-sol", "gpt-5.6-sol", "gpt-6-astra", "gpt-5.5"].map((id) => ({ providerID: "openai", id }))]
+
+const COOLDOWN = 30 * 60 * 1000
+
+// Remembers models whose provider just refused with an auth or quota failure so the next recovery skips them.
+// Auth failures and OpenAI usage limits cover the whole provider; other quota failures only the one model.
+export function cooldown(cooling = new Map<string, number>()) {
+  return {
+    mark(input: { failure: Failure; failed: ModelRef; now?: number }) {
+      const providerWide = input.failure.category.startsWith("refresh_") || input.failed.providerID === "openai"
+      if (!providerWide && !["model_quota", "capacity"].includes(input.failure.category)) return
+      cooling.set(providerWide ? `${input.failed.providerID}/*` : `${input.failed.providerID}/${input.failed.id}`, (input.now ?? Date.now()) + COOLDOWN)
+    },
+    active(now = Date.now()) {
+      return [...cooling].filter(([, until]) => until > now).map(([key]) => key)
+    },
+  }
+}
 
 export function fallback(input: { failure: Failure; failed: ModelRef; directory?: string; available: readonly ModelRef[]; tried?: readonly string[] }): ModelRef | undefined {
   const auth = input.failure.category.startsWith("refresh_") && input.failure.exhausted
   if (!auth && !["model_quota", "capacity"].includes(input.failure.category)) return
   const work = isWork(input.directory)
-  // Auth outages always use the personal Sol subscription. Work quota recovery
+  // Auth outages walk the personal ladder. Work quota recovery
   // retains the established same-Claude-on-Cursor billing route.
-  const candidates = auth ? personal.slice(0, 1) : work ? [
+  const candidates = auth ? personal : work ? [
     ...(input.failed.providerID === "anthropic" ? [{ providerID: "cursor", id: `${input.failed.id.replace(/-1m$/, "")}-1m` }, { providerID: "cursor", id: input.failed.id }] : []),
     { providerID: "cursor", id: "claude-opus-5" }, { providerID: "anthropic", id: "claude-opus-5-5" },
   ] : personal
-  return candidates.find((model) => `${model.providerID}/${model.id}` !== `${input.failed.providerID}/${input.failed.id}` && !input.tried?.includes(`${model.providerID}/${model.id}`) && input.available.some((item) => item.providerID === model.providerID && item.id === model.id))
+  return candidates.find((model) => `${model.providerID}/${model.id}` !== `${input.failed.providerID}/${input.failed.id}` && !input.tried?.some((key) => key === `${model.providerID}/${model.id}` || key === `${model.providerID}/*`) && input.available.some((item) => item.providerID === model.providerID && item.id === model.id))
 }
