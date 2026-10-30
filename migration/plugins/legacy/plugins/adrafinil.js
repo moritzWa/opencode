@@ -6,7 +6,7 @@ var Adrafinil = async ({ $ }) => {
   const release = async (id) => {
     if (!held.delete(id))
       return;
-    await $`${adrafinil} release ${id}`.quiet().nothrow();
+    await $`${adrafinil} release ${id} --tool opencode`.quiet().nothrow();
   };
   return {
     event: async ({ event }) => {
@@ -21,7 +21,7 @@ var Adrafinil = async ({ $ }) => {
       if (status !== "busy" || held.has(id))
         return;
       held.add(id);
-      await $`${adrafinil} acquire ${id} --tool opencode --ttl 3600`.quiet().nothrow();
+      await $`${adrafinil} acquire ${id} --tool opencode --ttl 14400`.quiet().nothrow();
     }
   };
 };
