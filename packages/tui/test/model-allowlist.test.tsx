@@ -11,7 +11,19 @@ test("allowlist matches exact model, provider wildcard and global wildcard", () 
   expect(modelAllowed(["openai/*", "cursor/gpt-5"], selected)).toBe(false)
 })
 
-test("automatic fallback/cycling excludes disallowed picks and manual pick ends on leaving chat", async () => {
+test("a chat keeps its own saved model even when it is off the allowlist", async () => {
+  await using setup = await renderLocal({
+    config: { model_allowlist: ["provider/allowed"] },
+    models: [model("blocked"), model("allowed")],
+    sessions: [session("ses_one", { providerID: "provider", id: "blocked" })],
+    preferences: { recent: [{ providerID: "provider", modelID: "allowed" }] },
+  })
+  await setup.data.session.sync("ses_one")
+  setup.route.navigate({ type: "session", sessionID: "ses_one" })
+  expect(setup.local.model.current()?.modelID).toBe("blocked")
+})
+
+test("automatic fallback/cycling excludes disallowed picks; a chat reverts to its own saved model on return", async () => {
   await using setup = await renderLocal({
     config: { model_allowlist: ["provider/allowed"] },
     models: [model("blocked"), model("allowed")],
@@ -26,7 +38,7 @@ test("automatic fallback/cycling excludes disallowed picks and manual pick ends 
   expect(setup.local.model.current()?.modelID).toBe("allowed")
   await setup.data.session.sync("ses_one")
   setup.route.navigate({ type: "session", sessionID: "ses_one" })
-  expect(setup.local.model.current()?.modelID).toBe("allowed")
+  expect(setup.local.model.current()?.modelID).toBe("blocked")
   setup.local.model.set({ providerID: "provider", modelID: "blocked" }, { recent: true })
   expect(setup.local.model.current()?.modelID).toBe("blocked")
   setup.local.model.cycle(1)
@@ -36,5 +48,5 @@ test("automatic fallback/cycling excludes disallowed picks and manual pick ends 
   await setup.renderOnce()
   expect(setup.local.model.current()?.modelID).toBe("allowed")
   setup.route.navigate({ type: "session", sessionID: "ses_one" })
-  expect(setup.local.model.current()?.modelID).toBe("allowed")
+  expect(setup.local.model.current()?.modelID).toBe("blocked")
 })

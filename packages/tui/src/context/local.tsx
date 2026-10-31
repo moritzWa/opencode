@@ -284,7 +284,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
       function durableSelection(sessionID: string): ModelSelection | undefined {
         const model = data.session.get(sessionID)?.model
-        if (!model || !isModelAllowed({ providerID: model.providerID, modelID: model.id })) return
+        // The allowlist only governs automatic picks. A chat keeps the model it was last given, otherwise the next
+        // send would silently commit a fallback over it.
+        if (!model) return
         return {
           providerID: model.providerID,
           modelID: model.id,
@@ -326,8 +328,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         setSessionSelection(
           sessionID,
           current.id,
-          isModelAllowed(selection) &&
-            (!session?.agent || session.agent === current.id) &&
+          (!session?.agent || session.agent === current.id) &&
             durable &&
             selectionKey(durable) === selectionKey(selection)
             ? undefined
