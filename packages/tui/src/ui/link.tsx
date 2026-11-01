@@ -54,7 +54,8 @@ export function clickedLink(renderer: CliRenderer, event: MouseEvent) {
  */
 export function clickedPath(renderer: CliRenderer, event: MouseEvent, directory: string) {
   if (!isPlainClick(renderer, event) || event.x < 0 || event.y < 0) return
-  const row = new TextDecoder().decode(renderer.currentRenderBuffer.getRealCharBytes(true)).split("\n")[event.y]
+  const rows = new TextDecoder().decode(renderer.currentRenderBuffer.getRealCharBytes(true)).split("\n")
+  const row = rows[event.y]
   if (!row) return
   let column = 0
   let index = 0
@@ -63,17 +64,40 @@ export function clickedPath(renderer: CliRenderer, event: MouseEvent, directory:
     if (column > event.x) break
     index += char.length
   }
-  const words = [...row.matchAll(/(?:\\.|\S)+/g)].map((match) => ({ start: match.index, end: match.index + match[0].length }))
+  // The buffer does not say which rows are soft-wrapped, so words from the rows around the click are candidates for
+  // continuing a path. Border glyphs from message gutters are not part of any path.
+  const words = rows.flatMap((text, at) =>
+    Math.abs(at - event.y) > 3
+      ? []
+      : [...text.matchAll(/(?:\\.|\S)+/g)]
+          .filter((match) => !/^[\u2500-\u257f]+$/.test(match[0]))
+          .map((match) => ({ row: at, start: match.index, end: match.index + match[0].length, text: match[0] })),
+  )
+  const inside = words.findIndex((word) => word.row === event.y && word.start <= index && index < word.end)
+  const after = words.findIndex((word) => word.row === event.y && word.start > index)
+  const gap = inside < 0 && after > 0 && words[after - 1].row === event.y
+  if (inside < 0 && !gap) return
+  const from = inside >= 0 ? inside : after - 1
+  const to = inside >= 0 ? inside : after
   const matches = words.flatMap((first, at) => {
-    if (first.start > index || !/^[`"'(\[<]*(?:~|\.{0,2})?\//.test(row.slice(first.start, first.end))) return []
-    // Unescaped spaces are common in pasted paths, so try each longer run of words and keep the longest match.
-    return words.slice(at, at + 8).flatMap((last) => {
-      if (last.end <= index) return []
-      const found = existingPath(row.slice(first.start, last.end), directory)
-      return found ? [{ found, length: last.end - first.start }] : []
+    if (at > from || !/^[`"'(\[<]*(?:~|\.{0,2})?\//.test(first.text)) return []
+    // Unescaped spaces are common in pasted paths, so try each longer run of words and keep the longest match. Across a
+    // wrap the separating space is dropped, while a word wrapped mid-token has none.
+    let runs = [first.text]
+    return words.slice(at, at + 8).flatMap((word, offset) => {
+      if (offset > 0) {
+        const wrapped = words[at + offset - 1].row !== word.row
+        runs = runs.flatMap((run) => (wrapped ? [" ", ""] : [" "]).map((join) => run + join + word.text))
+      }
+      return at + offset >= to ? runs : []
     })
   })
-  return matches.toSorted((a, b) => b.length - a.length)[0]?.found
+  return matches
+    .flatMap((text) => {
+      const found = existingPath(text, directory)
+      return found ? [{ found, length: text.length }] : []
+    })
+    .toSorted((a, b) => b.length - a.length)[0]?.found
 }
 
 export function openLink(target: string, directory: string) {

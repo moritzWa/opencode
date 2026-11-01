@@ -105,6 +105,44 @@ test("plain clicks on text naming an existing local path resolve it", async () =
   }
 })
 
+test("plain clicks resolve local paths that wrap across rows", async () => {
+  await using root = await tmpdir()
+  const file = path.join(root.path, "polish sentence draft.mp4")
+  await Bun.write(file, "x")
+  const clicked: (string | undefined)[] = []
+  function Transcript() {
+    const renderer = useRenderer()
+    return (
+      <box
+        width={40}
+        onMouseUp={(event) => {
+          clicked.push(clickedPath(renderer, event, root.path))
+        }}
+      >
+        <text>{`┃ ${file.replaceAll(" ", "\\ ")} thanks`}</text>
+        <text>{`┃ ${file} thanks`}</text>
+      </box>
+    )
+  }
+  const clock = new ManualClock()
+  const app = await testRender(() => <Transcript />, { width: 40, height: 14, clock })
+
+  try {
+    await app.renderOnce()
+    const rows = app.captureCharFrame().split("\n")
+    const at = rows.flatMap((row, y) => (row.trim() ? [y] : []))
+    expect(at).toHaveLength(8)
+    for (const y of at) {
+      // Clicks in quick succession count as double and triple clicks, which are not plain clicks.
+      clock.advance(1000)
+      await app.mockMouse.click(rows[y]!.search(/\S/) + 3, y)
+    }
+    expect(clicked).toEqual(at.map(() => file))
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("local links open existing files and refuse programs and missing paths", async () => {
   await using root = await tmpdir()
   await mkdir(path.join(root.path, "Thing.app"))
