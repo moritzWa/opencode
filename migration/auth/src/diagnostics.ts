@@ -16,7 +16,7 @@ export class Diagnostics {
   }
   record(failure: Failure, action: "retry_claude" | "stay_claude" | "fallback" | "stop" | "refresh_saved", session?: string) {
     this.db.transaction(() => {
-      this.db.query("INSERT INTO diagnostic(at,session,category,status,reason,retry_after_ms,action,quota_window) VALUES(?,?,?,?,?,?,?,?)").run(Date.now(), session && /^ses_[a-zA-Z0-9]{1,128}$/.test(session) ? session : null, failure.category, failure.status ?? null, safeReasons.has(failure.reason) ? failure.reason : "unrecognized_upstream_error", failure.retryAfterMs ?? null, action, ["5h", "7d", "7d_opus"].includes(failure.quotaWindow ?? "") ? failure.quotaWindow ?? null : null)
+      this.db.query("INSERT INTO diagnostic(at,session,category,status,reason,retry_after_ms,action,quota_window) VALUES(?,?,?,?,?,?,?,?)").run(Date.now(), session && /^ses_[a-zA-Z0-9]{1,128}$/.test(session) ? session : null, failure.category, failure.status ?? null, failure.reason === "insufficient_credits" || safeReasons.has(failure.reason) ? failure.reason : "unrecognized_upstream_error", failure.retryAfterMs ?? null, action, ["5h", "7d", "7d_opus"].includes(failure.quotaWindow ?? "") ? failure.quotaWindow ?? null : null)
       this.db.query("DELETE FROM diagnostic WHERE id <= (SELECT COALESCE(MAX(id),0)-? FROM diagnostic)").run(this.limit)
     })()
   }

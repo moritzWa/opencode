@@ -10,7 +10,7 @@ import { Diagnostics } from "./diagnostics.ts"
 import { legacy, accountStore } from "./legacy.ts"
 import { gateway } from "./gateway.ts"
 import { ClaudeFailure, readFailure } from "./failure.ts"
-import { boundRetry, fallback } from "./policy.ts"
+import { boundRetry, cooldown, fallback } from "./policy.ts"
 
 // Structural forward contract for the coordinated core seam. Once integrated,
 // this is exactly SessionHooks["recovery"]; no V1 event guesses are used.
@@ -28,10 +28,10 @@ export const SubscriptionPlugin: Plugin = {
   id: "local.claude-subscription",
   async setup(context) {
     const modules = await legacy(typeof context.options.legacyRoot === "string" ? context.options.legacyRoot : undefined)
-    const accounts = modules.keychain.readAllClaudeAccounts()
+    // A temporarily unreadable Keychain must not disable cross-provider recovery.
+    const accounts = (() => { try { return modules.keychain.readAllClaudeAccounts() } catch { return [] } })()
     const source = typeof context.options.accountSource === "string" ? context.options.accountSource : modules.preferredSource()
     const account = accounts.find((item) => item.source === source) ?? accounts[0]
-    if (!account) throw new Error("No Claude Code subscription credentials found")
     const diagnostics = new Diagnostics(typeof context.options.diagnostics === "string" ? context.options.diagnostics : join(homedir(), ".local/share/opencode-v2/claude-subscription/diagnostics.sqlite"))
     const auths = new Map(accounts.map((item) => [item.source, new SubscriptionAuth({ store: accountStore(item, modules), diagnostics })]))
     const integrationID = Integration.ID.make("anthropic")
@@ -39,12 +39,13 @@ export const SubscriptionPlugin: Plugin = {
       async credentials(signal, force) {
         const connection = await context.integration.connection.active(integrationID)
         const selected = connection ? await context.integration.connection.resolve(connection) : undefined
-        const preferred = selected?.type === "external" && typeof selected.metadata?.accountSource === "string" ? selected.metadata.accountSource : account.source
-        const auth = auths.get(preferred)
-        if (!auth) throw new ClaudeFailure({ category: "credential_store", reason: "missing_credentials" })
+        const preferred = selected?.type === "external" && typeof selected.metadata?.accountSource === "string" ? selected.metadata.accountSource : account?.source
+        const auth = preferred ? auths.get(preferred) : undefined
+        if (!auth) throw new ClaudeFailure({ category: "refresh_invalid", reason: "missing_credentials", exhausted: true })
         return auth.credentials(signal, force)
       },
     }, transport: modules.transport, diagnostics })
+    const cooling = cooldown()
     const registrations: Registration[] = []
     const keep = async (pending: Promise<Registration>) => { const registration = await pending; registrations.push(registration) }
     const cleanup = async () => {
@@ -53,7 +54,7 @@ export const SubscriptionPlugin: Plugin = {
       diagnostics.close()
     }
     try {
-      await keep(context.integration.transform((editor) => editor.method.update({
+      if (account) await keep(context.integration.transform((editor) => editor.method.update({
         integrationID,
         method: {
           id: Integration.MethodID.make("claude-keychain"),
@@ -69,7 +70,12 @@ export const SubscriptionPlugin: Plugin = {
         })
         for (const model of editor.get("anthropic")?.models.values() ?? []) editor.models.update("anthropic", model.id, (item) => { item.cost = [] })
       }))
-      await keep(context.session.hook("model.request", (event) => {
+      await keep(context.session.hook("model.request", async (event) => {
+        // Respect an explicitly selected API key. Only external subscription
+        // connections (or the original no-connection default) use the gateway.
+        const connection = await context.integration.connection.active(integrationID).catch(() => undefined)
+        const selected = connection ? await context.integration.connection.resolve(connection).catch(() => undefined) : undefined
+        if (selected?.type === "key") return
         event.baseURL = proxy.url
         event.headers["x-subscription-gateway"] = proxy.secret
         event.headers["x-subscription-session"] = event.sessionID
@@ -80,7 +86,8 @@ export const SubscriptionPlugin: Plugin = {
         if (!detail) return
         const available = await context.model.list({}).then((result) => result.data).catch(() => [])
         const session = await context.session.get({ sessionID: event.sessionID }).catch(() => undefined)
-        const model = fallback({ failure: detail, failed: event.model, directory: session?.location.directory, available })
+        cooling.mark({ failure: detail, failed: event.model })
+        const model = fallback({ failure: detail, failed: event.model, directory: session?.location.directory, available, tried: cooling.active() })
         if (!model) { diagnostics.record(detail, "stop", event.sessionID); return }
         const selected = available.find((item) => item.providerID === model.providerID && item.id === model.id)
         if (!selected) return

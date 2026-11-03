@@ -32,9 +32,10 @@ const modules = await legacy(process.env.CLAUDE_AUTH_TEST_ROOT)
 const cleanup: Array<() => void> = []
 afterAll(() => cleanup.reverse().forEach((fn) => fn()))
 
-for (const scenario of ["brief", "persistent", "quota"] as const) {
+for (const scenario of ["brief", "persistent", "quota", "credits"] as const) {
   const persistent = scenario === "persistent"
   const quota = scenario === "quota"
+  const credits = scenario === "credits"
   const directory = mkdtempSync(join(tmpdir(), "auth-runner-"))
   cleanup.push(() => rmSync(directory, { recursive: true, force: true }))
   const file = join(directory, "credentials.json")
@@ -52,6 +53,7 @@ for (const scenario of ["brief", "persistent", "quota"] as const) {
       }
       if (new URL(request.url).pathname === "/v1/messages") {
         claude++
+        if (credits) return Response.json({ type: "error", error: { type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits." } }, { status: 400 })
         if (quota) {
           const body = Bun.gzipSync(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "Synthetic subscription window rejected" } }))
           return new Response(body, { status: 429, headers: { "content-type": "application/json", "content-encoding": "gzip", "content-length": String(body.byteLength), "retry-after": "17", "anthropic-ratelimit-unified-5h-status": "rejected", "request-id": "synthetic-claude-quota" } })
@@ -82,9 +84,9 @@ for (const scenario of ["brief", "persistent", "quota"] as const) {
   })
   const proxy = gateway({ auth, transport: modules.transport, upstream: origin })
   cleanup.push(() => { proxy.stop() })
-  const primary = AnthropicMessages.route.with({ endpoint: { baseURL: proxy.url }, auth: Auth.none, headers: { "x-subscription-gateway": proxy.secret } }).model({ id: "claude-opus-5-5" })
+   const primary = AnthropicMessages.route.with({ endpoint: { baseURL: credits ? `${origin}/v1` : proxy.url }, auth: Auth.none, headers: { "x-subscription-gateway": proxy.secret } }).model({ id: "claude-opus-5-5" })
   const it = testEffect(recoveryRunnerLayer(directory, `${origin}/v1`, primary))
-  it.live(quota ? "compressed upstream 429 evidence survives actual Anthropic parser and once-only Sol recovery" : persistent ? "persistent refresh failure passes actual Anthropic parser and runner and resumes once on Sol" : "brief refresh failure stays Claude through compressed upstream SSE and actual Anthropic parser", () => Effect.gen(function* () {
+   it.live(credits ? "direct API credit exhaustion passes actual Anthropic parser and runner and resumes once on Sol" : quota ? "compressed upstream 429 evidence survives actual Anthropic parser and once-only Sol recovery" : persistent ? "persistent refresh failure passes actual Anthropic parser and runner and resumes once on Sol" : "brief refresh failure stays Claude through compressed upstream SSE and actual Anthropic parser", () => Effect.gen(function* () {
     const sessionID = Session.ID.make(`ses_auth_${scenario}`)
     const db = (yield* Database.Service).db
     const agents = yield* Agent.Service
@@ -108,8 +110,8 @@ for (const scenario of ["brief", "persistent", "quota"] as const) {
     yield* hooks.register("session", "retry", (event: Parameters<typeof boundRetry>[0]) => Effect.sync(() => boundRetry(event)))
     yield* hooks.register("session", "recovery", (event: Recovery) => Effect.sync(() => {
       const detail = readFailure(event.error)
-      expect(detail?.category).toBe(quota ? "model_quota" : "refresh_server")
-      expect(detail?.status).toBe(quota ? 429 : 503)
+       expect(detail?.category).toBe(credits ? "billing" : quota ? "model_quota" : "refresh_server")
+       expect(detail?.status).toBe(credits ? 400 : quota ? 429 : 503)
       if (quota) {
         expect(detail?.reason).toBe("rate_limit_error")
         expect(detail?.quotaWindow).toBe("5h")
@@ -123,11 +125,11 @@ for (const scenario of ["brief", "persistent", "quota"] as const) {
     }))
     yield* sessions.prompt({ sessionID, text: "Complete outstanding request", resume: false })
     yield* runner.drain({ sessionID, force: false })
-    expect(recoveries).toBe(persistent || quota ? 1 : 0)
+     expect(recoveries).toBe(persistent || quota || credits ? 1 : 0)
     expect(claude).toBe(persistent ? 0 : 1)
-    expect(sol).toBe(persistent || quota ? 1 : 0)
-    expect(elapsed).toBe(quota ? 0 : persistent ? 75000 : 1000)
-    expect(refreshes).toBe(quota ? 0 : persistent ? 8 : 2)
+     expect(sol).toBe(persistent || quota || credits ? 1 : 0)
+     expect(elapsed).toBe(quota || credits ? 0 : persistent ? 75000 : 1000)
+     expect(refreshes).toBe(quota || credits ? 0 : persistent ? 8 : 2)
     expect(responses).toBe(1)
   }))
 }

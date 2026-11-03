@@ -1,4 +1,4 @@
-export type Category = "refresh_throttle" | "refresh_network" | "refresh_server" | "refresh_revoked" | "refresh_invalid" | "refresh_pending" | "credential_store" | "model_quota" | "model_throttle" | "capacity" | "upstream_network" | "unknown"
+export type Category = "refresh_throttle" | "refresh_network" | "refresh_server" | "refresh_revoked" | "refresh_invalid" | "refresh_pending" | "credential_store" | "model_quota" | "model_throttle" | "billing" | "capacity" | "upstream_network" | "unknown"
 
 export interface Failure {
   category: Category
@@ -34,14 +34,15 @@ export async function classify(response: Response, phase: "refresh" | "model"): 
   const reason = reasons.has(code) ? code : "unrecognized_upstream_error"
   const wait = retryAfter(response.headers.get("retry-after"))
   const quotaWindow = phase === "model" && response.status === 429 ? (["5h", "7d", "7d_opus"] as const).find((window) => response.headers.get(`anthropic-ratelimit-unified-${window}-status`) === "rejected") : undefined
-  const category: Category = phase === "refresh"
+  const billing = phase === "model" && response.status === 400 && code === "invalid_request_error" && error && typeof error === "object" && "message" in error && typeof error.message === "string" && error.message.includes("Your credit balance is too low to access the Anthropic API")
+  const category: Category = billing ? "billing" : phase === "refresh"
     ? ["invalid_grant", "invalid_client", "unauthorized_client", "access_denied", "token_revoked"].includes(reason) || response.status === 401 || response.status === 403 ? "refresh_revoked"
       : response.status === 429 ? "refresh_throttle"
         : response.status >= 500 ? "refresh_server" : "refresh_invalid"
     : quotaWindow || ["quota_exceeded", "insufficient_quota", "usage_limit_reached"].includes(reason) ? "model_quota"
       : reason === "capacity_limit" ? "capacity"
         : response.status === 429 ? "model_throttle" : "unknown"
-  return { category, status: response.status, reason, ...(wait === undefined ? {} : { retryAfterMs: wait }), ...(quotaWindow ? { quotaWindow } : {}) }
+  return { category, status: response.status, reason: billing ? "insufficient_credits" : reason, ...(wait === undefined ? {} : { retryAfterMs: wait }), ...(quotaWindow ? { quotaWindow } : {}) }
 }
 
 export function failureResponse(detail: Failure) {
@@ -53,13 +54,18 @@ export function failureResponse(detail: Failure) {
 export function readFailure(error: { type?: string; message?: string; response?: { body: string } }): Failure | undefined {
   const parsed: unknown = error.response ? (() => { try { return JSON.parse(error.response.body) } catch { return undefined } })() : undefined
   if (!parsed || typeof parsed !== "object" || !("subscription" in parsed)) {
+    // Direct API-key requests bypass the subscription gateway. Keep this narrow:
+    // ordinary invalid requests (context length, tools, etc.) must not switch models.
+    const upstream = parsed && typeof parsed === "object" && "error" in parsed ? parsed.error : undefined
+    if (upstream && typeof upstream === "object" && "type" in upstream && upstream.type === "invalid_request_error" && "message" in upstream && typeof upstream.message === "string" && upstream.message.includes("Your credit balance is too low to access the Anthropic API")) return { category: "billing", status: 400, reason: "insufficient_credits" }
     if (error.type === "provider.quota") return { category: "model_quota", reason: "quota_exceeded" }
+    if (error.type === "provider.auth") return { category: "refresh_revoked", reason: "authentication_error", exhausted: true }
     if (/\bcapacity_limit\b/.test(error.message ?? "")) return { category: "capacity", reason: "capacity_limit" }
     return
   }
   const detail = parsed.subscription
   if (!detail || typeof detail !== "object" || !("category" in detail) || !("reason" in detail)) return
-  const categories: Category[] = ["refresh_throttle", "refresh_network", "refresh_server", "refresh_revoked", "refresh_invalid", "refresh_pending", "credential_store", "model_quota", "model_throttle", "capacity", "upstream_network", "unknown"]
+  const categories: Category[] = ["refresh_throttle", "refresh_network", "refresh_server", "refresh_revoked", "refresh_invalid", "refresh_pending", "credential_store", "model_quota", "model_throttle", "billing", "capacity", "upstream_network", "unknown"]
   const category = categories.find((item) => item === detail.category)
   if (!category || typeof detail.reason !== "string") return
   const status = "status" in detail && typeof detail.status === "number" && Number.isInteger(detail.status) && detail.status >= 100 && detail.status <= 599 ? detail.status : undefined

@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { SubscriptionAuth } from "../src/auth.ts"
 import { ClaudeFailure, classify, readFailure, retryAfter } from "../src/failure.ts"
 import { Diagnostics } from "../src/diagnostics.ts"
-import { fallback, isWork } from "../src/policy.ts"
+import { boundRetry, cooldown, fallback, isWork } from "../src/policy.ts"
 import { legacy } from "../src/legacy.ts"
 import { gateway } from "../src/gateway.ts"
 
@@ -119,7 +119,29 @@ test("billing boundaries and quota evidence", async () => {
   expect(fallback({ failure: generic, failed: { providerID: "anthropic", id: "claude-opus-5-5" }, available })).toBeUndefined()
   expect(readFailure({ response: { body: "not-json" } })).toBeUndefined()
   expect(retryAfter("Thu, 01 Jan 1970 00:00:10 GMT", 1000)).toBe(9000)
-  expect(fallback({ failure: { category: "model_quota", reason: "quota_exceeded" }, failed: { providerID: "anthropic", id: "claude-opus-5-5" }, available, directory: join(process.env.HOME!, "Code/arca") })).toEqual(available[1])
+  expect(fallback({ failure: { category: "model_quota", reason: "quota_exceeded" }, failed: { providerID: "anthropic", id: "claude-opus-5-5" }, available, directory: join(process.env.HOME!, "Code/arca") })).toEqual(available[0])
+})
+
+test("direct Anthropic API credit exhaustion switches Sonnet to Sol without retry or bounce-back", async () => {
+  const body = JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits." } })
+  const error = { type: "provider.invalid-request", message: "Your credit balance is too low to access the Anthropic API.", response: { body } }
+  const failure = readFailure(error)!
+  expect(failure).toEqual({ category: "billing", status: 400, reason: "insufficient_credits" })
+  expect(await classify(new Response(body, { status: 400 }), "model")).toEqual(failure)
+  expect(readFailure({ response: { body: JSON.stringify({ subscription: failure }) } })).toEqual(failure)
+  const retry = { error, decision: { retry: true as const, delay: 1000 } as { retry: true; delay: number } | { retry: false } }
+  boundRetry(retry)
+  expect(retry.decision).toEqual({ retry: false })
+  const failed = { providerID: "anthropic", id: "claude-sonnet-5-5" }
+  const models = [...available, failed, { providerID: "anthropic", id: "claude-opus-5-5" }]
+  const cooling = cooldown()
+  cooling.mark({ failure, failed, now: 0 })
+  expect(cooling.active(1)).toEqual(["anthropic/*"])
+  expect(fallback({ failure, failed, available: models, directory: join(process.env.HOME!, "Code/arca"), tried: cooling.active(1) })).toEqual(available[0])
+  expect(fallback({ failure: { category: "model_quota", reason: "quota_exceeded" }, failed: available[0]!, available: models, tried: cooling.active(1) })).toBeUndefined()
+  expect(cooling.active(30 * 60 * 1000)).toEqual([])
+  expect(readFailure({ type: "provider.invalid-request", response: { body: JSON.stringify({ error: { type: "invalid_request_error", message: "prompt is too long" } }) } })).toBeUndefined()
+  expect(readFailure({ type: "provider.auth" })?.exhausted).toBe(true)
 })
 
 test("licensed V1 transport reused without setup; gateway carries structured refresh failure", async () => {

@@ -223,7 +223,9 @@ const resolveCatalogModel = Effect.fn("ModelResolver.resolveCatalogModel")(funct
     Effect.mapError((error) => initialization(resolved, "load", error.cause)),
   )
   const settings = {
-    ...(credential ? Struct.omit(mapped, ["accessToken", "apiKey", "authToken"]) : mapped),
+    // External connections supply identity, not a replacement secret. Plugins
+    // still need their configured gateway auth to reach model.request hooks.
+    ...(credential && credential.type !== "external" ? Struct.omit(mapped, ["accessToken", "apiKey", "authToken"]) : mapped),
     ...(resolved.canonical === undefined ? {} : { provider: resolved.canonical }),
     ...nativeCredentialSettings(resolved, specifier, credential),
     headers: resolved.headers,

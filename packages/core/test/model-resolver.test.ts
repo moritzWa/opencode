@@ -964,6 +964,17 @@ describe("ModelResolver", () => {
     }),
   )
 
+  it.effect("preserves plugin gateway auth for external subscription connections", () =>
+    Effect.gen(function* () {
+      const resolved = yield* ModelResolver.fromCatalogModel(
+        model("@opencode/ai/providers/anthropic", { settings: { authToken: "external-claude-subscription" } }),
+        Credential.External.make({ type: "external", methodID: Integration.MethodID.make("claude-keychain"), metadata: { accountSource: "synthetic-account" } }),
+      )
+      const headers = yield* resolved.route.auth.apply({ request: LLM.request({ model: resolved, prompt: "Hello" }), method: "POST", url: "http://127.0.0.1/v1/messages", body: "{}", headers: Headers.empty })
+      expect(headers.authorization).toBe("Bearer external-claude-subscription")
+    }),
+  )
+
   it.effect("maps OAuth credentials to native provider auth settings", () =>
     Effect.gen(function* () {
       const native = yield* ModelResolver.fromCatalogModel(
