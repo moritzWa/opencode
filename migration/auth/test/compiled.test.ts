@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-test("packed auth activates in the compiled CLI without a published SDK copy; default pinned resolver reads no credentials", async () => {
+test.each(["present", "missing", "locked"] as const)("packed auth activates with %s Keychain credentials without a published SDK copy", async (account) => {
   const root = fileURLToPath(new URL("../", import.meta.url))
   const executable = process.env.AUTH_COMPILED_CLI ?? fileURLToPath(new URL("../../../packages/cli/dist/cli-darwin-arm64/bin/opencode", import.meta.url))
   const directory = mkdtempSync(join(tmpdir(), "auth-compiled-"))
@@ -53,7 +53,7 @@ test("packed auth activates in the compiled CLI without a published SDK copy; de
     const dependencyRoot = resolved.root
     await Bun.write(join(legacyRoot, "dist/keychain.js"), `
       const credentials = {accessToken:"synthetic-access", refreshToken:"synthetic-refresh", expiresAt:Date.now()+3600000}
-      export const readAllClaudeAccounts = () => [{source:"fixture", label:"Synthetic test account", credentials}]
+      export const readAllClaudeAccounts = () => { ${account === "locked" ? 'throw new Error("Synthetic Keychain unavailable")' : `return ${account === "missing" ? "[]" : '[{source:"fixture", label:"Synthetic test account", credentials}]'}`} }
       export const refreshAccount = () => credentials
       export const writeBackCredentials = () => true
     `)
