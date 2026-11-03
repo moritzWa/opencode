@@ -14,7 +14,9 @@ export type LocalAttachment =
   | Readonly<{ type: "text"; mime: "image/svg+xml"; content: string }>
   | Readonly<{ type: "binary"; mime: string; content: Uint8Array }>
 
-export function readLocalAttachment(file: string, maxBytes = MAX_LOCAL_ATTACHMENT_BYTES) {
+export type PasteAttach = "all" | "images" | "never"
+
+export function readLocalAttachment(file: string, maxBytes = MAX_LOCAL_ATTACHMENT_BYTES, mode: PasteAttach = "all") {
   return readLocalAttachmentWith(
     {
       readText: async (value, limit) => (await readFileBounded(value, limit)).toString("utf8"),
@@ -23,22 +25,25 @@ export function readLocalAttachment(file: string, maxBytes = MAX_LOCAL_ATTACHMEN
     },
     file,
     maxBytes,
+    mode,
   )
 }
 
-export async function resolvePastedAttachments(text: string, platform: string) {
+export async function resolvePastedAttachments(text: string, platform: string, mode: PasteAttach = "all") {
+  if (mode === "never") return undefined
   const pastedContent = text.trim()
   const filepath = normalizePastedFilepath(pastedContent, platform)
   if (/^(https?):\/\//.test(filepath)) return undefined
 
-  const attachment = await readLocalAttachment(filepath)
+  const attachment = await readLocalAttachment(filepath, MAX_LOCAL_ATTACHMENT_BYTES, mode)
   const attachments = attachment ? [{ filepath, attachment }] : []
   if (!attachment) {
     const filepaths = parsePastedFilepaths(pastedContent, platform)
     if (filepaths.length <= 1) return undefined
     let remaining = MAX_LOCAL_ATTACHMENT_BYTES
     for (const candidate of filepaths) {
-      const next = await readLocalAttachment(candidate, remaining)
+      // Keep a mixed drop intact as text rather than silently omitting any paths.
+      const next = await readLocalAttachment(candidate, remaining, mode)
       if (!next) return undefined
       remaining -= typeof next.content === "string" ? Buffer.byteLength(next.content) : next.content.byteLength
       attachments.push({ filepath: candidate, attachment: next })
@@ -161,9 +166,12 @@ export async function readLocalAttachmentWith(
   files: LocalFiles,
   path: string,
   maxBytes = MAX_LOCAL_ATTACHMENT_BYTES,
+  mode: PasteAttach = "all",
 ): Promise<LocalAttachment | undefined> {
+  if (mode === "never") return undefined
   const mime = await files.mime(path).catch(() => undefined)
   if (!mime) return undefined
+  if (mode === "images" && !mime.startsWith("image/")) return undefined
   if (!mime.startsWith("image/") && mime !== "application/pdf") return undefined
   if (mime === "image/svg+xml") {
     const content = await files.readText(path, maxBytes).catch(() => undefined)

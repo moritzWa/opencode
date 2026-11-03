@@ -119,6 +119,48 @@ describe("prompt local attachments", () => {
     }
   })
 
+  test("images mode leaves PDFs and mixed drops as paths while still attaching images", async () => {
+    await using tmp = await tmpdir()
+    const image = path.join(tmp.path, "one image.png")
+    const pdf = path.join(tmp.path, "two file.pdf")
+    await Promise.all([Bun.write(image, new Uint8Array([1, 2, 3])), Bun.write(pdf, "%PDF-1.7")])
+
+    for (const input of [pdf, `'${pdf}'`, pathToFileURL(pdf).href, `'${image}' '${pdf}'`]) {
+      expect(await resolvePastedAttachments(input, process.platform, "images")).toBeUndefined()
+    }
+    expect(await resolvePastedAttachments(image, process.platform, "images")).toEqual([
+      { type: "file", uri: "data:image/png;base64,AQID", filename: "one image.png" },
+    ])
+    expect(await resolvePastedAttachments(`'${image}' '${image}'`, process.platform, "images")).toHaveLength(2)
+  })
+
+  test("never mode leaves image, SVG, and PDF drops as paths", async () => {
+    await using tmp = await tmpdir()
+    for (const name of ["image.png", "image.svg", "report.pdf"]) {
+      const file = path.join(tmp.path, name)
+      await Bun.write(file, "content")
+      expect(await resolvePastedAttachments(file, process.platform, "never")).toBeUndefined()
+    }
+  })
+
+  test("excluded files are not read", async () => {
+    const reads: string[] = []
+    const tracked: LocalFiles = {
+      mime: async () => "application/pdf",
+      readBytes: async (file) => {
+        reads.push(file)
+        return new Uint8Array([1])
+      },
+      readText: async (file) => {
+        reads.push(file)
+        return "content"
+      },
+    }
+    expect(await readLocalAttachmentWith(tracked, "/report.pdf", MAX_LOCAL_ATTACHMENT_BYTES, "images")).toBeUndefined()
+    expect(await readLocalAttachmentWith(tracked, "/report.pdf", MAX_LOCAL_ATTACHMENT_BYTES, "never")).toBeUndefined()
+    expect(reads).toEqual([])
+  })
+
   test("falls back to plain text for unsupported or incomplete drops", async () => {
     await using tmp = await tmpdir()
     const image = path.join(tmp.path, "image.png")

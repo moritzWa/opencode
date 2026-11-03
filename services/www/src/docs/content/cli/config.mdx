@@ -91,6 +91,7 @@ Configure mouse capture, scrolling, editor context, pastes, and prompt image pre
   "prompt": {
     "editor": true,
     "paste": "compact",
+    "paste_attach": "all",
     "image_preview": false
   }
 }
@@ -105,9 +106,14 @@ Configure mouse capture, scrolling, editor context, pastes, and prompt image pre
 | `scroll.acceleration`      | boolean                         | Accelerates repeated scrolling. When enabled, it takes precedence over speed. |
 | `prompt.editor`            | boolean                         | Includes the active editor file or selection as prompt context.             |
 | `prompt.paste`             | `compact` or `full`             | Shows large pastes as compact placeholders or as full text.                  |
+| `prompt.paste_attach`      | `all`, `images`, or `never`      | Auto-attaches supported file paths, images only, or no paths. Defaults to `all`. |
 | `prompt.image_preview`     | boolean                         | Shows image attachment previews above the prompt input.                     |
 
 </div>
+
+Set `prompt.paste_attach` to `images` to keep PDF paths as text while still attaching images.
+Use `never` to insert all dropped or pasted file paths as text. Images copied directly to the clipboard
+are still attached. If a multi-file drop contains an excluded file, the whole drop stays as text.
 
 ## Sessions
 

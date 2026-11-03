@@ -9,6 +9,17 @@ import { CommandMap, Definitions } from "../src/config/v1/keybind"
 
 const decodeInfo = Schema.decodeUnknownSync(Info)
 
+test("validates file path attachment preferences", () => {
+  for (const mode of ["all", "images", "never"] as const) {
+    expect(decodeInfo({ prompt: { paste_attach: mode } })).toEqual({ prompt: { paste_attach: mode } })
+  }
+  expect(() => decodeInfo({ prompt: { paste_attach: "paths" } })).toThrow()
+  expect(settings.find((setting) => setting.path.join(".") === "prompt.paste_attach")).toMatchObject({
+    default: "all",
+    values: ["all", "images", "never"],
+  })
+})
+
 test("validates the explicit diff source defaults", () => {
   for (const source of ["branch", "committed", "working", "turn"] as const) {
     expect(decodeInfo({ diffs: { source } })).toEqual({ diffs: { source } })

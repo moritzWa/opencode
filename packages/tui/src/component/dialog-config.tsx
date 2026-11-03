@@ -250,6 +250,15 @@ export const settings: Setting[] = [
     keywords: ["paste summary", "clipboard", "pasted content"],
   },
   {
+    title: "File path attachments",
+    category: "Input",
+    path: ["prompt", "paste_attach"],
+    default: "all",
+    values: ["all", "images", "never"],
+    labels: ["all supported files", "images only", "paths only"],
+    keywords: ["paste", "drop", "PDF", "attachments", "file paths"],
+  },
+  {
     title: "Image previews",
     category: "Input",
     path: ["prompt", "image_preview"],

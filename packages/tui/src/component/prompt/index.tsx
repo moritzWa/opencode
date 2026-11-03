@@ -1473,7 +1473,11 @@ export function Prompt(props: PromptProps) {
   async function pasteInputText(text: string, changed: () => boolean) {
     const normalizedText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
     const pastedContent = normalizedText.trim()
-    const attachments = await resolvePastedAttachments(pastedContent, terminalEnvironment.platform)
+    const attachments = await resolvePastedAttachments(
+      pastedContent,
+      terminalEnvironment.platform,
+      config.prompt?.paste_attach,
+    )
     if (changed()) return
     if (attachments) {
       attachments.forEach((attachment) => {

@@ -444,6 +444,30 @@ test("a failed clipboard read cancels a waiting submit without losing the draft"
   }
 })
 
+test.each(["images", "never"] as const)("mini keeps PDF paths as text in %s mode", async (mode) => {
+  await using tmp = await tmpdir()
+  const file = `${tmp.path}/report.pdf`
+  await Bun.write(file, "%PDF-1.7")
+  const submitted: RunPrompt[] = []
+  const app = await renderFooter({
+    tuiConfig: createTuiResolvedConfig({ prompt: { paste_attach: mode } }),
+    onSubmit: (prompt) => {
+      submitted.push(prompt)
+      return true
+    },
+  })
+  try {
+    await app.renderOnce()
+    await app.mockInput.pasteBracketedText(file)
+    app.mockInput.pressEnter()
+    await app.waitFor(() => submitted.length === 1)
+    expect(submitted[0].text).toBe(file)
+    expect(submitted[0].parts).toEqual([])
+  } finally {
+    app.cleanup()
+  }
+})
+
 test("mini attaches dropped image paths and removes attachments with their labels", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/one image.png`, diffImageFixture)

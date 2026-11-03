@@ -149,6 +149,10 @@ export const Info = Schema.Struct({
       paste: Schema.optional(Schema.Literals(["compact", "full"])).annotate({
         description: "Display large pastes as compact placeholders or full text",
       }),
+      paste_attach: Schema.optional(Schema.Literals(["all", "images", "never"])).annotate({
+        description:
+          "Auto-attach pasted file paths: all supported files (default), images only, or never. Other paths remain text. Clipboard images are unaffected.",
+      }),
       image_preview: Schema.optional(Schema.Boolean).annotate({
         description: "Show image attachment previews above the prompt input",
       }),
