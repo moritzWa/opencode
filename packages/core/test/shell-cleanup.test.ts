@@ -50,4 +50,43 @@ describe("Shell cleanup", () => {
       }),
     ),
   )
+
+  it.live("removes the record and status of an old finished command, but never those of a running one", () =>
+    withStore((fs, root) =>
+      Effect.gen(function* () {
+        const project = path.join(root, Shell.DIRECTORY, "project")
+        yield* fs.ensureDir(project)
+        const entry = (id: string, pid: number) => ({
+          id,
+          command: "x",
+          cwd: project,
+          shell: "/bin/sh",
+          file: path.join(project, `${id}.out`),
+          metadata: {},
+          directory: project,
+          pid,
+          started: 0,
+        })
+        const finished = entry("sh_0123456789abFINISHEDxxxxxx", 999_999_999)
+        // This test process stands in for a command that has been silent for over a week but still runs.
+        const running = entry("sh_0123456789abRUNNINGxxxxxxx", process.pid)
+        const expired = new Date(Date.now() - 8 * 24 * 60 * 60 * 1_000)
+        for (const item of [finished, running]) {
+          yield* fs.writeFileString(item.file, "output")
+          yield* fs.writeFileString(item.file.replace(/\.out$/, ".json"), JSON.stringify(item))
+        }
+        yield* fs.writeFileString(finished.file.replace(/\.out$/, ".exit"), "0")
+        const files = [finished, running].flatMap((item) => [
+          item.file,
+          item.file.replace(/\.out$/, ".json"),
+          ...(item === finished ? [item.file.replace(/\.out$/, ".exit")] : []),
+        ])
+        for (const file of files) yield* fs.utimes(file, new Date(), expired)
+
+        yield* Shell.cleanup()
+
+        for (const file of files) expect(yield* fs.exists(file)).toBe(file.includes("RUNNING"))
+      }),
+    ),
+  )
 })

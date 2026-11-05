@@ -23,6 +23,7 @@ import { SessionSchema } from "./session/schema.js"
 import { Config } from "./config.js"
 import { ToolOutput } from "./tool-output.js"
 import { ShellResult } from "./shell/result.js"
+import { ShellDurable } from "./shell/durable.js"
 
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()("Shell.NotFoundError", {
   id: Shell.ID,
@@ -32,11 +33,13 @@ export class NotFoundError extends Schema.TaggedError<NotFoundError>()("Shell.No
 // The process-local cap complements the time-based sweep, which also cleans files left by restarts.
 const EXITED_LIMIT = 25
 export const RETENTION = Duration.days(7)
-export const DIRECTORY = "shell"
+export const DIRECTORY = ShellDurable.DIRECTORY
 
 type Info = Shell.Info
 type CreateInput = Shell.CreateInput & {
   shell?: string
+  // Keep the command running when the server stops, and find it again when one starts. Local POSIX only.
+  durable?: boolean
 }
 
 type Active = {
@@ -45,6 +48,9 @@ type Active = {
   file: string
   size: number
   newlines: number
+  // Set for commands that outlive the server; their output is written by the command itself.
+  durable?: ShellDurable.Entry
+  monitor?: Fiber.Fiber<void>
   // Resolves with the terminal Info once the command exits, times out, or is killed. A wait
   // started after termination resolves immediately from the already-completed deferred.
   done: Deferred.Deferred<Info, NotFoundError>
@@ -92,16 +98,21 @@ export const cleanup = Effect.fn("Shell.cleanup")(function* () {
   const files = yield* Effect.forEach(
     projects,
     (project) =>
-      fs.readDirectoryEntries(path.join(directory, project.name)).pipe(
-        Effect.map((entries) =>
-          entries.flatMap((entry) =>
-            entry.type === "file" && /^sh_[0-9a-f]{12}.*\.out$/.test(entry.name)
-              ? [path.join(directory, project.name, entry.name)]
-              : [],
+      Effect.gen(function* () {
+        const live = yield* Effect.promise(() => ShellDurable.running(path.join(directory, project.name)))
+        return yield* fs.readDirectoryEntries(path.join(directory, project.name)).pipe(
+          Effect.map((entries) =>
+            entries.flatMap((entry) => {
+              const match = /^(sh_[0-9a-f]{12}.*)\.(out|json|exit)$/.exec(entry.name)
+              // A command that is still running keeps its files however quiet it has been.
+              return entry.type === "file" && match && !live.has(match[1]!)
+                ? [path.join(directory, project.name, entry.name)]
+                : []
+            }),
           ),
-        ),
-        Effect.orElseSucceed(() => []),
-      ),
+          Effect.orElseSucceed(() => []),
+        )
+      }),
     { concurrency: 8 },
   )
   yield* FileRetention.cleanup(fs, files.flat(), RETENTION)
@@ -143,6 +154,8 @@ const layer = () =>
         Effect.gen(function* () {
           for (const command of commands.values()) {
             if (command.timeoutFiber) yield* Fiber.interrupt(command.timeoutFiber)
+            // A durable command is left running for the next server to find; only the watching stops.
+            if (command.monitor) yield* Fiber.interrupt(command.monitor)
             // Teardown interrupts pending commands; it is not a terminal command failure.
             yield* Deferred.interrupt(command.done)
           }
@@ -164,10 +177,134 @@ const layer = () =>
         if (!command) return
         commands.delete(id)
         if (command.timeoutFiber) yield* Fiber.interrupt(command.timeoutFiber)
+        // Removing a durable command is the one thing besides its own end that stops it.
+        if (command.durable) {
+          if (command.monitor) yield* Fiber.interrupt(command.monitor)
+          // Stop it before deleting its files: the wrapper writes its status as it goes.
+          if (command.info.status === "running") yield* ShellDurable.stop(command.durable)
+          yield* Effect.promise(() => ShellDurable.drop(command.durable!))
+        }
         // Unblock any wait still pending when the command is removed before it terminated.
         yield* Deferred.fail(command.done, new NotFoundError({ id }))
         yield* Effect.promise(() => unlink(command.file).catch(() => {}))
         yield* bus.publish(Shell.Event.Deleted, { id })
+      })
+
+      // Reads the size a durable command's output has reached; the command, not this server, writes it.
+      const refresh = Effect.fnUntraced(function* (command: Active) {
+        if (!command.durable) return
+        const { stat } = yield* Effect.promise(() => import("fs/promises"))
+        const info = yield* Effect.promise(() => stat(command.file).catch(() => undefined))
+        if (info) command.size = info.size
+      })
+
+      // Moves a command to its terminal state once, whichever of its end paths gets there first.
+      const complete = (
+        command: Active,
+        outputDone: Latch.Latch | undefined,
+        status: Info["status"],
+        exit?: number,
+        beforeWait: Effect.Effect<void> = Effect.void,
+        signal?: string,
+        completed = Date.now(),
+      ) =>
+        Effect.gen(function* () {
+          if (command.info.status !== "running") return
+          command.info = produce(command.info, (draft) => {
+            draft.status = status
+            if (exit !== undefined) draft.exit = exit
+            if (signal !== undefined) draft.signal = signal
+            draft.time.completed = completed
+          })
+          yield* beforeWait
+          if (outputDone) yield* outputDone.await
+          // Resolve waiters with the terminal Info before any retention eviction, so an evicted
+          // command still reports success rather than the removal NotFoundError. This runs before
+          // the timeout-fiber interrupt below, which on the timeout path would otherwise cancel
+          // this very fiber (finish is invoked by the timeout fiber) before waiters are resolved.
+          yield* Deferred.succeed(command.done, command.info)
+          yield* bus.publish(Shell.Event.Exited, {
+            id: command.info.id,
+            ...(exit !== undefined ? { exit } : {}),
+            status,
+          })
+          exitOrder.push(command.info.id)
+          while (exitOrder.length > EXITED_LIMIT) {
+            const oldest = exitOrder[0]
+            if (!oldest) break
+            yield* removeCommand(oldest)
+          }
+          // Keep exited history data-only. Interrupt last because finish may run on the timeout fiber.
+          const timeoutFiber = command.timeoutFiber
+          command.timeout = undefined
+          command.timeoutFiber = undefined
+          if (timeoutFiber) yield* Fiber.interrupt(timeoutFiber)
+        })
+
+      const durable = ShellDurable.supported && location.workspaceID === undefined
+
+      const schedule = (command: Active, entry: ShellDurable.Entry, ms: number) =>
+        Effect.gen(function* () {
+          if (command.timeoutFiber) yield* Fiber.interrupt(command.timeoutFiber)
+          command.timeoutFiber = undefined
+          if (ms <= 0 || command.info.status !== "running") return
+          command.timeoutFiber = runFork(
+            Effect.sleep(Duration.millis(ms)).pipe(
+              Effect.flatMap(() => complete(command, undefined, "timeout", undefined, ShellDurable.stop(entry))),
+            ),
+          )
+        })
+
+      // Follows a durable command to its end, whether this server started it or found it running.
+      const watch = (command: Active, entry: ShellDurable.Entry, verify: boolean) =>
+        ShellDurable.wait(entry, verify).pipe(
+          Effect.flatMap((outcome) =>
+            Effect.gen(function* () {
+              // Removed or timed out here: that path already settled the command and ended the process.
+              if (outcome._tag === "removed" || command.info.status !== "running") return
+              if (outcome._tag === "lost") {
+                yield* Effect.promise(() => ShellDurable.markLost(entry.file))
+                return yield* complete(command, undefined, "killed", undefined, Effect.void, undefined, outcome.at)
+              }
+              const signal = yield* Effect.promise(() => ShellDurable.signalName(outcome.code))
+              return signal === undefined
+                ? yield* complete(command, undefined, "exited", outcome.code, Effect.void, undefined, outcome.at)
+                : yield* complete(command, undefined, "exited", undefined, Effect.void, signal, outcome.at)
+            }),
+          ),
+        )
+
+      const track = Effect.fnUntraced(function* (info: Info, entry: ShellDurable.Entry, adopted: boolean) {
+        const command: Active = {
+          info,
+          file: entry.file,
+          size: 0,
+          newlines: 0,
+          done: Deferred.makeUnsafe<Info, NotFoundError>(),
+          durable: entry,
+        }
+        commands.set(info.id, command)
+        command.timeout = (duration) =>
+          Effect.gen(function* () {
+            if (command.info.status !== "running") return
+            if (duration === 0) delete entry.deadline
+            else entry.deadline = Date.now() + duration
+            // Saved so a server that takes over still enforces it.
+            yield* Effect.promise(() => ShellDurable.save(entry))
+            yield* schedule(command, entry, duration)
+          })
+        // A command found already over is settled before anyone can read it as still running.
+        const over =
+          adopted &&
+          ((yield* Effect.promise(() => ShellDurable.readExit(entry.file))) !== undefined ||
+            !(yield* Effect.promise(() => ShellDurable.alive(entry.pid, entry.identity))))
+        if (over) {
+          yield* watch(command, entry, true)
+          return command
+        }
+        command.monitor = runFork(watch(command, entry, false))
+        if (entry.deadline !== undefined) yield* schedule(command, entry, Math.max(1, entry.deadline - Date.now()))
+        return command
       })
 
       const remove = Effect.fn("Shell.remove")(function* (id: Shell.ID) {
@@ -198,6 +335,7 @@ const layer = () =>
 
       const output = Effect.fnUntraced(function* (id: Shell.ID, input?: Shell.OutputInput) {
         const command = yield* require(id)
+        yield* refresh(command)
         const cursor = input?.cursor ?? 0
         const limit = input?.limit ?? 65536
         if (cursor >= command.size) return { output: "", cursor: command.size, size: command.size, truncated: false }
@@ -242,7 +380,12 @@ const layer = () =>
           if (page.output.endsWith("\n")) lines.pop()
           const truncated = latest.size > maxBytes || lines.length > maxLines
           const text = lines.length > maxLines ? lines.slice(-maxLines).join("\n") : page.output
-          const total = (yield* require(info.id)).newlines + (page.output.endsWith("\n") ? 0 : 1)
+          const command = yield* require(info.id)
+          const total = command.durable
+            ? truncated
+              ? yield* Effect.promise(() => ShellDurable.countLines(command.file))
+              : 0
+            : command.newlines + (page.output.endsWith("\n") ? 0 : 1)
           const shown = Math.min(lines.length, maxLines)
           const notice = truncated
             ? `\n\n[showing lines ${total - shown + 1}-${total} of ${total}; full output saved to ${info.file}]`
@@ -289,6 +432,31 @@ const layer = () =>
           file,
           metadata: input.metadata ?? {},
           time: { started: Date.now() },
+        }
+
+        if (input.durable === true && durable) {
+          const spawned = yield* Effect.tryPromise({
+            try: () =>
+              ShellDurable.spawn({ shell: invocation.shell, args, cwd: invocation.cwd, env: invocation.env, file }),
+            catch: (cause) => new AppProcess.AppProcessError({ command: invocation.command, cause }),
+          })
+          const entry: ShellDurable.Entry = {
+            id,
+            command: invocation.command,
+            cwd: invocation.cwd,
+            shell: invocation.shell,
+            file,
+            metadata: info.metadata,
+            directory: location.directory,
+            pid: spawned.pid,
+            ...(spawned.identity !== undefined ? { identity: spawned.identity } : {}),
+            started: info.time.started,
+            ...(invocation.timeout > 0 ? { deadline: info.time.started + invocation.timeout } : {}),
+          }
+          yield* Effect.promise(() => ShellDurable.save(entry))
+          const command = yield* track({ ...info, pid: spawned.pid }, entry, false)
+          yield* bus.publish(Shell.Event.Created, { info: command.info })
+          return command.info
         }
 
         // Spawn through the Environment and stream combined output to the file. The handle is scope-bound, so
@@ -356,38 +524,7 @@ const layer = () =>
               )
 
               const finish = (status: Info["status"], exit?: number, beforeWait = Effect.void, signal?: string) =>
-                Effect.gen(function* () {
-                  if (command.info.status !== "running") return
-                  command.info = produce(command.info, (draft) => {
-                    draft.status = status
-                    if (exit !== undefined) draft.exit = exit
-                    if (signal !== undefined) draft.signal = signal
-                    draft.time.completed = Date.now()
-                  })
-                  yield* beforeWait
-                  yield* outputDone.await
-                  // Resolve waiters with the terminal Info before any retention eviction, so an evicted
-                  // command still reports success rather than the removal NotFoundError. This runs before
-                  // the timeout-fiber interrupt below, which on the timeout path would otherwise cancel
-                  // this very fiber (finish is invoked by the timeout fiber) before waiters are resolved.
-                  yield* Deferred.succeed(command.done, command.info)
-                  yield* bus.publish(Shell.Event.Exited, {
-                    id,
-                    ...(exit !== undefined ? { exit } : {}),
-                    status,
-                  })
-                  exitOrder.push(id)
-                  while (exitOrder.length > EXITED_LIMIT) {
-                    const oldest = exitOrder[0]
-                    if (!oldest) break
-                    yield* removeCommand(oldest)
-                  }
-                  // Keep exited history data-only. Interrupt last because finish may run on the timeout fiber.
-                  const timeoutFiber = command.timeoutFiber
-                  command.timeout = undefined
-                  command.timeoutFiber = undefined
-                  if (timeoutFiber) yield* Fiber.interrupt(timeoutFiber)
-                })
+                complete(command, outputDone, status, exit, beforeWait, signal)
 
               command.timeout = (duration) =>
                 Effect.gen(function* () {
@@ -435,6 +572,43 @@ const layer = () =>
         const command = yield* Deferred.await(ready)
         return command.info
       })
+
+      // Commands an earlier server left running are this server's again; ones that ended meanwhile
+      // keep their real result. Only this location's own commands are adopted.
+      if (durable) {
+        const recorded = yield* Effect.promise(() => ShellDurable.load(outputDir))
+        const mine = recorded
+          .filter((entry) => entry.directory === location.directory)
+          .sort((a, b) => a.started - b.started)
+        const ended = new Set<string>()
+        for (const entry of mine)
+          if (yield* Effect.promise(() => ShellDurable.readExit(entry.file))) ended.add(entry.id)
+        const keep = new Set(
+          mine
+            .filter((entry) => ended.has(entry.id))
+            .slice(-EXITED_LIMIT)
+            .map((entry) => entry.id),
+        )
+        for (const entry of mine) {
+          if (ended.has(entry.id) && !keep.has(entry.id)) continue
+          const command = yield* track(
+            {
+              id: Shell.ID.ascending(entry.id),
+              status: "running",
+              command: entry.command,
+              cwd: entry.cwd,
+              shell: entry.shell,
+              file: entry.file,
+              pid: entry.pid,
+              metadata: entry.metadata,
+              time: { started: entry.started },
+            },
+            entry,
+            true,
+          )
+          if (!ended.has(entry.id)) yield* bus.publish(Shell.Event.Created, { info: command.info })
+        }
+      }
 
       return Service.of({ create, list, get, wait, result, timeout, output, remove })
     }),

@@ -1858,6 +1858,44 @@ describe("ShellTool", () => {
     )
   }
 
+  if (!isWindows) {
+    it.live("cancelling a background job on purpose stops its command and removes it", () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const shell = yield* Shell.Service
+              const jobs = yield* Job.Service
+              const settled = yield* executeTool(
+                registry,
+                call({ command: "sleep 60 & sleep 60", background: true }, "call-cancel-background"),
+              )
+              const id = ID.make(String(settled.metadata?.shellID))
+              const pid = (yield* shell.get(id)).pid!
+              const running = () => {
+                try {
+                  process.kill(-pid, 0)
+                  return true
+                } catch {
+                  return false
+                }
+              }
+              expect(running()).toBe(true)
+              yield* jobs.cancel(id)
+
+              // The whole process group, including the command's own children, is gone.
+              expect(running()).toBe(false)
+              expect(yield* shell.get(id).pipe(Effect.flip)).toBeInstanceOf(Shell.NotFoundError)
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    )
+  }
+
   it.live("backgrounds a foreground command when the session is signaled", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),

@@ -24,11 +24,27 @@ import { SessionInboxTable, SessionTable } from "@opencode/core/session/sql"
 import { SessionStore } from "@opencode/core/session/store"
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Scope } from "effect"
 import { eq } from "drizzle-orm"
+import fs from "node:fs/promises"
+import path from "node:path"
+import { Global } from "@opencode/util/global"
+import { ShellDurable } from "@opencode/core/shell/durable"
+import { Shell } from "@opencode/schema/shell"
+import { tempGlobalLayer } from "./fixture/global"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, Bus.node, SessionStore.node, SessionInbox.node, Job.node, KV.node, Session.node]),
+    LayerNode.group([
+      Database.node,
+      Bus.node,
+      SessionStore.node,
+      SessionInbox.node,
+      Job.node,
+      KV.node,
+      Session.node,
+      Global.node,
+    ]),
+    [Global.node.replace(tempGlobalLayer)],
   ),
 )
 
@@ -1233,6 +1249,194 @@ describe("SessionExecution interrupt continuation", () => {
   )
 })
 
+// A durable shell is a real process that outlives its server. The "restart" is a new Job registry
+// over the same stored markers, the way a new server starts, with the process still running.
+describe.skipIf(process.platform === "win32")("durable background shells after a server restart", () => {
+  const spawnDurable = (command: string) =>
+    Effect.gen(function* () {
+      const global = yield* Global.Service
+      const directory = path.join(global.data, ShellDurable.DIRECTORY, "global")
+      yield* Effect.promise(() => fs.mkdir(directory, { recursive: true }))
+      const id = Shell.ID.create()
+      const file = path.join(directory, `${id}.out`)
+      const spawned = yield* Effect.promise(() =>
+        ShellDurable.spawn({ shell: "/bin/sh", args: ["-c", command], cwd: directory, env: process.env, file }),
+      )
+      const entry: ShellDurable.Entry = {
+        id,
+        command,
+        cwd: directory,
+        shell: "/bin/sh",
+        file,
+        metadata: {},
+        directory,
+        pid: spawned.pid,
+        ...(spawned.identity !== undefined ? { identity: spawned.identity } : {}),
+        started: Date.now(),
+      }
+      yield* Effect.promise(() => ShellDurable.save(entry))
+      return entry
+    })
+
+  const eventually = <A, E, R>(label: string, check: Effect.Effect<A | undefined | false, E, R>, ms = 10_000) =>
+    Effect.gen(function* () {
+      const deadline = Date.now() + ms
+      while (Date.now() < deadline) {
+        const value = yield* check
+        if (value) return value
+        yield* Effect.sleep("25 millis")
+      }
+      return yield* Effect.die(new Error(`timed out waiting for ${label}`))
+    })
+
+  const restartWith = (sessionID: Session.ID, woken: Session.ID[]) =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const restarted = yield* Job.make.pipe(Effect.provideService(Scope.Scope, scope))
+      const context = yield* buildExecution(
+        scope,
+        ({ sessionID: id }) =>
+          Effect.sync(() => void woken.push(id)).pipe(
+            Effect.andThen(SessionInbox.promote(database.db, bus, id, "steer")),
+            Effect.asVoid,
+          ),
+        undefined,
+        restarted,
+      )
+      return { restarted, restart: Context.get(context, SessionRestart.Service), sessionID }
+    })
+
+  const notices = (sessionID: Session.ID) =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore.Service
+      return (yield* store.context(sessionID)).filter((message) => message.type === "synthetic")
+    })
+
+  it.live("reattaches a shell that is still running and reports its real end exactly once", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const jobs = yield* Job.Service
+      const sessionID = Session.ID.make("ses_durable_running")
+      yield* seedSessions(database, [sessionID])
+      const entry = yield* spawnDurable("echo working; sleep 1; echo finished; exit 4")
+      yield* seedBackground(jobs, sessionID, [{ id: entry.id, shellID: entry.id, command: entry.command }])
+
+      const woken: Session.ID[] = []
+      const { restarted, restart } = yield* restartWith(sessionID, woken)
+      yield* restart.resumeSuspendedSessions
+
+      // The command is still running: nothing is announced and the marker stays until it is.
+      expect(yield* SessionInbox.list(database.db, sessionID)).toEqual([])
+      expect(yield* restarted.pendingBackground).toHaveLength(1)
+
+      yield* eventually("the end notification", Effect.map(notices(sessionID), (found) => found.length > 0 && found))
+      const found = yield* notices(sessionID)
+      expect(found).toHaveLength(1)
+      const text = String(found[0]?.text)
+      expect(found[0]).toMatchObject({
+        description: entry.command,
+        metadata: { source: "shell", shellID: entry.id, state: "completed", exit: 4 },
+      })
+      expect(text).toContain("finished")
+      expect(text).toContain("Exited with code 4")
+      // Nobody told this Session the shell was cancelled: it was not.
+      expect(text).not.toContain("server restarted")
+      // The Session was idle and waiting on this shell, so its notice wakes it.
+      expect(woken).toEqual([sessionID])
+      yield* eventually("acknowledged marker", Effect.map(restarted.pendingBackground, (pending) => pending.length === 0))
+
+      // Another restart finds nothing left to announce.
+      yield* restart.resumeSuspendedSessions
+      expect(yield* notices(sessionID)).toHaveLength(1)
+    }),
+  )
+
+  it.live("delivers the real result of a shell that ended while no server ran", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const jobs = yield* Job.Service
+      const sessionID = Session.ID.make("ses_durable_ended")
+      yield* seedSessions(database, [sessionID])
+      const entry = yield* spawnDurable("printf all-done")
+      yield* seedBackground(jobs, sessionID, [{ id: entry.id, shellID: entry.id, command: entry.command }])
+      yield* eventually("exit status", Effect.promise(() => ShellDurable.readExit(entry.file)))
+
+      const woken: Session.ID[] = []
+      const { restarted, restart } = yield* restartWith(sessionID, woken)
+      yield* restart.resumeSuspendedSessions
+      yield* eventually("the notification", Effect.map(notices(sessionID), (found) => found.length > 0 && found))
+
+      const [notice] = yield* notices(sessionID)
+      const text = String(notice?.text)
+      expect(notice).toMatchObject({ metadata: { state: "completed", exit: 0 } })
+      expect(text).toContain("all-done")
+      yield* eventually("acknowledged marker", Effect.map(restarted.pendingBackground, (pending) => pending.length === 0))
+    }),
+  )
+
+  it.live("reports a shell whose process vanished as failed, with its partial output", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const jobs = yield* Job.Service
+      const sessionID = Session.ID.make("ses_durable_lost")
+      yield* seedSessions(database, [sessionID])
+      const entry = yield* spawnDurable("echo partial; sleep 30")
+      yield* seedBackground(jobs, sessionID, [{ id: entry.id, shellID: entry.id, command: entry.command }])
+      yield* eventually("first output", Effect.promise(async () => (await fs.readFile(entry.file, "utf8")).includes("partial")))
+      process.kill(-entry.pid, "SIGKILL")
+
+      const { restart } = yield* restartWith(sessionID, [])
+      yield* restart.resumeSuspendedSessions
+      yield* eventually("the notification", Effect.map(notices(sessionID), (found) => found.length > 0 && found))
+
+      const [notice] = yield* notices(sessionID)
+      const text = String(notice?.text)
+      expect(notice).toMatchObject({ metadata: { state: "error" } })
+      expect(text).toContain("partial")
+      expect(text).toContain("disappeared")
+    }),
+  )
+
+  it.live("reports a shell stopped on purpose while it was being awaited as cancelled", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const jobs = yield* Job.Service
+      const sessionID = Session.ID.make("ses_durable_stopped")
+      yield* seedSessions(database, [sessionID])
+      const entry = yield* spawnDurable("sleep 30")
+      yield* seedBackground(jobs, sessionID, [{ id: entry.id, shellID: entry.id, command: entry.command }])
+
+      const { restart } = yield* restartWith(sessionID, [])
+      yield* restart.resumeSuspendedSessions
+      yield* ShellDurable.stop(entry)
+      yield* Effect.promise(() => ShellDurable.drop(entry))
+      yield* eventually("the notification", Effect.map(notices(sessionID), (found) => found.length > 0 && found))
+
+      const [notice] = yield* notices(sessionID)
+      expect(notice).toMatchObject({ metadata: { state: "cancelled" } })
+      expect(String(notice?.text)).toContain("Cancelled")
+    }),
+  )
+
+  it.live("still cancels a background shell that was never durable", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const jobs = yield* Job.Service
+      const sessionID = Session.ID.make("ses_not_durable")
+      yield* seedSessions(database, [sessionID])
+      yield* seedBackground(jobs, sessionID, [{ id: "sh_legacy_shell", shellID: "sh_legacy_shell", command: "sleep 60" }])
+
+      const { restarted, restart } = yield* restartWith(sessionID, [])
+      yield* restart.resumeSuspendedSessions
+      expect(yield* SessionInbox.list(database.db, sessionID)).toHaveLength(1)
+      expect(yield* restarted.pendingBackground).toEqual([])
+    }),
+  )
+})
+
 function seedBackground(
   jobs: Job.Interface,
   sessionID: Session.ID,
@@ -1347,6 +1551,7 @@ function buildExecution(
     const store = yield* SessionStore.Service
     const jobs = overrideJobs ?? (yield* Job.Service)
     const sessions = yield* Session.Service
+    const global = yield* Global.Service
     const sessionLayer = Layer.effect(
       Session.Service,
       Effect.gen(function* () {
@@ -1383,6 +1588,7 @@ function buildExecution(
         Layer.provide(Layer.succeed(Bus.Service, bus)),
         Layer.provide(Layer.succeed(SessionStore.Service, store)),
         Layer.provide(Layer.succeed(Job.Service, jobs)),
+        Layer.provide(Layer.succeed(Global.Service, global)),
         // Do not reuse the outer harness's selector with its already-captured Location map.
         Layer.provide(
           AppNodeBuilder.build(Instance.node, [LocationServiceMap.node.replace(locations)]).pipe(Layer.fresh),

@@ -59,6 +59,7 @@ type Active = {
   isBackgrounded: boolean
   consumed: boolean
   recovery?: Recovery
+  onCancel?: Effect.Effect<void>
 }
 
 type State = {
@@ -71,6 +72,7 @@ type FinishResult = {
   done?: Deferred.Deferred<Info>
   scope?: Scope.Closeable
   generation?: Scope.Closeable
+  onCancel?: Effect.Effect<void>
 }
 
 type BackgroundResult = {
@@ -99,6 +101,9 @@ export type StartInput = {
   metadata?: Record<string, unknown>
   recovery?: Recovery
   notificationID?: SessionMessage.ID
+  // Runs when the job is cancelled on purpose. Closing the registry on shutdown interrupts a job
+  // the same way but does not run this, so work meant to outlive the server can tell them apart.
+  onCancel?: Effect.Effect<void>
   run: Effect.Effect<string, unknown>
 }
 
@@ -280,6 +285,7 @@ export const make = Effect.gen(function* () {
               isBackgrounded: false,
               consumed: false,
               recovery: input.recovery,
+              ...(input.onCancel ? { onCancel: input.onCancel } : {}),
             }
             return [{ info: snapshot(job), scope }, new Map(jobs).set(input.id, job)]
           }),
@@ -427,11 +433,18 @@ export const make = Effect.gen(function* () {
         }
         yield* persistBackground(next)
         return [
-          { info: snapshot(next), done: job.done, scope: job.scope, generation: job.scope },
+          {
+            info: snapshot(next),
+            done: job.done,
+            scope: job.scope,
+            generation: job.scope,
+            ...(job.onCancel ? { onCancel: job.onCancel } : {}),
+          },
           new Map(jobs).set(id, next),
         ]
       }),
     )
+    if (result.onCancel) yield* result.onCancel.pipe(Effect.ignore)
     if (result.info && result.done) yield* Deferred.succeed(result.done, result.info)
     if (result.scope) yield* Scope.close(result.scope, Exit.void)
     if (result.generation) yield* consume(id, result.generation)

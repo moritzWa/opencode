@@ -1,7 +1,9 @@
 export * as SessionRestart from "./restart.js"
 
-import { Context, Effect, Layer } from "effect"
+import path from "path"
+import { Context, Deferred, Effect, Layer } from "effect"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
+import { Global } from "@opencode/util/global"
 import { Bus } from "../../bus.js"
 import { Job } from "../../job.js"
 import { Session } from "../../session.js"
@@ -9,7 +11,9 @@ import { SessionEvent } from "../event.js"
 import { SessionExecution } from "../execution.js"
 import { SessionSchema } from "../schema.js"
 import { SessionStore } from "../store.js"
+import { ShellDurable } from "../../shell/durable.js"
 import { ShellResult } from "../../shell/result.js"
+import { ToolOutput } from "../../tool-output.js"
 import { SubagentCompletion } from "../subagent-completion.js"
 
 const CONTINUE_AFTER_SERVER_RESTART =
@@ -71,6 +75,7 @@ export const layer = (options?: Options) =>
       const bus = yield* Bus.Service
       const jobs = yield* Job.Service
       const sessions = yield* Session.Service
+      const global = yield* Global.Service
       const scope = yield* Effect.scope
       const maxAttempts = options?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
 
@@ -98,10 +103,103 @@ export const layer = (options?: Options) =>
         return true
       })
 
+      // A durable shell outlived the server that started it. Wait for it again and tell its Session how
+      // it ended, once. Returns false when the shell was not started that way.
+      const recoverDurableShell = Effect.fnUntraced(function* (
+        background: Job.Background,
+        recovery: Extract<Job.Recovery, { kind: "shell" }>,
+        suspended: ReadonlySet<SessionSchema.ID>,
+      ) {
+        const entry = yield* Effect.promise(() =>
+          ShellDurable.find(path.join(global.data, ShellDurable.DIRECTORY), recovery.shellID),
+        )
+        if (!entry) return false
+        const settled = yield* Deferred.make<ShellDurable.Outcome>()
+        const run = ShellDurable.wait(entry, true).pipe(
+          Effect.tap((outcome) => Deferred.succeed(settled, outcome)),
+          Effect.flatMap((outcome) => {
+            if (outcome._tag === "exited") return Effect.succeed("exited")
+            if (outcome._tag === "removed") return Effect.interrupt
+            return Effect.promise(() => ShellDurable.markLost(entry.file)).pipe(
+              Effect.andThen(
+                Effect.fail(new Error("The command's process disappeared without reporting an exit status")),
+              ),
+            )
+          }),
+        )
+        yield* jobs.start({
+          id: background.id,
+          type: "shell",
+          title: recovery.command,
+          metadata: { sessionID: recovery.sessionID, shellID: recovery.shellID },
+          recovery,
+          notificationID: background.notificationID,
+          run,
+        })
+        yield* jobs.background(background.id)
+        yield* jobs.wait({ id: background.id }).pipe(
+          Effect.flatMap((result) =>
+            Effect.gen(function* () {
+              const info = result.info
+              if (!info || info.status === "running") return
+              const outcome = info.status === "cancelled" ? undefined : yield* Deferred.await(settled)
+              const tail = yield* Effect.promise(() =>
+                ShellDurable.tail(entry.file, { maxLines: ToolOutput.MAX_LINES, maxBytes: ToolOutput.MAX_BYTES }),
+              )
+              const signal =
+                outcome?._tag === "exited"
+                  ? yield* Effect.promise(() => ShellDurable.signalName(outcome.code))
+                  : undefined
+              const output: { output: string; truncated: boolean; exit?: number; signal?: string } = {
+                output: tail?.output ?? "",
+                truncated: tail?.truncated ?? false,
+                ...(outcome?._tag === "exited" ? (signal === undefined ? { exit: outcome.code } : { signal }) : {}),
+              }
+              const text =
+                info.status === "cancelled"
+                  ? "Cancelled"
+                  : [
+                      output.output,
+                      ShellResult.notice(output),
+                      output.truncated ? `[output truncated; full output saved to ${entry.file}]` : undefined,
+                    ]
+                      .filter((part) => part !== undefined && part !== "")
+                      .join("\n\n")
+              yield* sessions
+                .synthetic({
+                  ...(info.notificationID ? { id: info.notificationID } : {}),
+                  sessionID: recovery.sessionID,
+                  description: recovery.command,
+                  ...ShellResult.notification({
+                    jobID: background.id,
+                    shellID: recovery.shellID,
+                    command: recovery.command,
+                    state: info.status,
+                    text,
+                    ...(info.status === "completed" ? { output } : {}),
+                  }),
+                  // A Session that is itself being resumed reads this on its way back in. An idle one
+                  // is waiting for exactly this and must be woken.
+                  resume: suspended.has(recovery.sessionID) ? false : undefined,
+                })
+                .pipe(
+                  Effect.catchTag("Session.NotFoundError", () => Effect.void),
+                  Effect.orDie,
+                )
+              if (info.notificationID) yield* jobs.completeBackground(info.notificationID)
+            }),
+          ),
+          Effect.forkIn(scope),
+        )
+        return true
+      })
+
       const recoverShell = Effect.fnUntraced(function* (
         background: Job.Background,
         recovery: Extract<Job.Recovery, { kind: "shell" }>,
+        suspended: ReadonlySet<SessionSchema.ID>,
       ) {
+        if (background.status === "running" && (yield* recoverDurableShell(background, recovery, suspended))) return
         const state = background.status === "running" ? "cancelled" : background.status
         const text =
           background.status === "running"
@@ -210,7 +308,7 @@ export const layer = (options?: Options) =>
               if ((yield* jobs.get(background.id))?.status === "running") return
               const recovery = background.recovery
               yield* recovery.kind === "shell"
-                ? recoverShell(background, recovery)
+                ? recoverShell(background, recovery, suspended)
                 : recoverSubagent(background, recovery, suspended)
             }),
             { discard: true },
@@ -236,5 +334,5 @@ export const layer = (options?: Options) =>
 export const node = makeGlobalNode({
   service: Service,
   layer: layer(),
-  deps: [SessionStore.node, SessionExecution.node, Bus.node, Job.node, Session.node],
+  deps: [SessionStore.node, SessionExecution.node, Bus.node, Job.node, Session.node, Global.node],
 })

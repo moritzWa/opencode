@@ -207,6 +207,9 @@ export const Plugin = {
                   timeout,
                   shell: yield* compatibleShell,
                   metadata: { sessionID: context.sessionID },
+                  // A command started in the background must survive a server restart. One that began in
+                  // the foreground and was moved later was never started this way.
+                  durable: input.background === true,
                 },
                 (invocation) =>
                   Effect.gen(function* () {
@@ -234,7 +237,11 @@ export const Plugin = {
               }).pipe(
                 Effect.tap((output) => Deferred.succeed(settled, output)),
                 Effect.map((output) => resultMessages(output).join("\n\n")),
-                Effect.onInterrupt(() => shell.remove(info.id).pipe(Effect.ignore)),
+                // A background command outlives a server that is shutting down, which interrupts this the
+                // same way a cancel does. Its cancel hook below is what stops it on purpose.
+                Effect.onInterrupt(() =>
+                  input.background === true ? Effect.void : shell.remove(info.id).pipe(Effect.ignore),
+                ),
               )
               const job = yield* jobs.start({
                 // CodeMode children share a tool-call ID, but each shell must own its job.
@@ -248,6 +255,7 @@ export const Plugin = {
                   shellID: info.id,
                   command: info.command,
                 },
+                ...(input.background === true ? { onCancel: shell.remove(info.id).pipe(Effect.ignore) } : {}),
                 run,
               })
 
