@@ -1332,7 +1332,10 @@ describe.skipIf(process.platform === "win32")("durable background shells after a
       expect(yield* SessionInbox.list(database.db, sessionID)).toEqual([])
       expect(yield* restarted.pendingBackground).toHaveLength(1)
 
-      yield* eventually("the end notification", Effect.map(notices(sessionID), (found) => found.length > 0 && found))
+      yield* eventually(
+        "the end notification",
+        Effect.map(notices(sessionID), (found) => found.length > 0 && found),
+      )
       const found = yield* notices(sessionID)
       expect(found).toHaveLength(1)
       const text = String(found[0]?.text)
@@ -1346,7 +1349,10 @@ describe.skipIf(process.platform === "win32")("durable background shells after a
       expect(text).not.toContain("server restarted")
       // The Session was idle and waiting on this shell, so its notice wakes it.
       expect(woken).toEqual([sessionID])
-      yield* eventually("acknowledged marker", Effect.map(restarted.pendingBackground, (pending) => pending.length === 0))
+      yield* eventually(
+        "acknowledged marker",
+        Effect.map(restarted.pendingBackground, (pending) => pending.length === 0),
+      )
 
       // Another restart finds nothing left to announce.
       yield* restart.resumeSuspendedSessions
@@ -1362,18 +1368,27 @@ describe.skipIf(process.platform === "win32")("durable background shells after a
       yield* seedSessions(database, [sessionID])
       const entry = yield* spawnDurable("printf all-done")
       yield* seedBackground(jobs, sessionID, [{ id: entry.id, shellID: entry.id, command: entry.command }])
-      yield* eventually("exit status", Effect.promise(() => ShellDurable.readExit(entry.file)))
+      yield* eventually(
+        "exit status",
+        Effect.promise(() => ShellDurable.readExit(entry.file)),
+      )
 
       const woken: Session.ID[] = []
       const { restarted, restart } = yield* restartWith(sessionID, woken)
       yield* restart.resumeSuspendedSessions
-      yield* eventually("the notification", Effect.map(notices(sessionID), (found) => found.length > 0 && found))
+      yield* eventually(
+        "the notification",
+        Effect.map(notices(sessionID), (found) => found.length > 0 && found),
+      )
 
       const [notice] = yield* notices(sessionID)
       const text = String(notice?.text)
       expect(notice).toMatchObject({ metadata: { state: "completed", exit: 0 } })
       expect(text).toContain("all-done")
-      yield* eventually("acknowledged marker", Effect.map(restarted.pendingBackground, (pending) => pending.length === 0))
+      yield* eventually(
+        "acknowledged marker",
+        Effect.map(restarted.pendingBackground, (pending) => pending.length === 0),
+      )
     }),
   )
 
@@ -1385,12 +1400,18 @@ describe.skipIf(process.platform === "win32")("durable background shells after a
       yield* seedSessions(database, [sessionID])
       const entry = yield* spawnDurable("echo partial; sleep 30")
       yield* seedBackground(jobs, sessionID, [{ id: entry.id, shellID: entry.id, command: entry.command }])
-      yield* eventually("first output", Effect.promise(async () => (await fs.readFile(entry.file, "utf8")).includes("partial")))
+      yield* eventually(
+        "first output",
+        Effect.promise(async () => (await fs.readFile(entry.file, "utf8")).includes("partial")),
+      )
       process.kill(-entry.pid, "SIGKILL")
 
       const { restart } = yield* restartWith(sessionID, [])
       yield* restart.resumeSuspendedSessions
-      yield* eventually("the notification", Effect.map(notices(sessionID), (found) => found.length > 0 && found))
+      yield* eventually(
+        "the notification",
+        Effect.map(notices(sessionID), (found) => found.length > 0 && found),
+      )
 
       const [notice] = yield* notices(sessionID)
       const text = String(notice?.text)
@@ -1411,9 +1432,14 @@ describe.skipIf(process.platform === "win32")("durable background shells after a
 
       const { restart } = yield* restartWith(sessionID, [])
       yield* restart.resumeSuspendedSessions
+      // The order the Shell service stops a command on purpose.
+      yield* Effect.promise(() => ShellDurable.dropRecord(entry))
       yield* ShellDurable.stop(entry)
       yield* Effect.promise(() => ShellDurable.drop(entry))
-      yield* eventually("the notification", Effect.map(notices(sessionID), (found) => found.length > 0 && found))
+      yield* eventually(
+        "the notification",
+        Effect.map(notices(sessionID), (found) => found.length > 0 && found),
+      )
 
       const [notice] = yield* notices(sessionID)
       expect(notice).toMatchObject({ metadata: { state: "cancelled" } })
@@ -1427,7 +1453,9 @@ describe.skipIf(process.platform === "win32")("durable background shells after a
       const jobs = yield* Job.Service
       const sessionID = Session.ID.make("ses_not_durable")
       yield* seedSessions(database, [sessionID])
-      yield* seedBackground(jobs, sessionID, [{ id: "sh_legacy_shell", shellID: "sh_legacy_shell", command: "sleep 60" }])
+      yield* seedBackground(jobs, sessionID, [
+        { id: "sh_legacy_shell", shellID: "sh_legacy_shell", command: "sleep 60" },
+      ])
 
       const { restarted, restart } = yield* restartWith(sessionID, [])
       yield* restart.resumeSuspendedSessions

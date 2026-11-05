@@ -79,6 +79,8 @@ describeUnix("durable shells", () => {
             durable: true,
           })
           expect(info.status).toBe("running")
+          // A client can tell from the listing that a restart will not stop this command.
+          expect(info.metadata).toMatchObject({ durable: true })
           expect(alive(info.pid)).toBe(true)
           expect(yield* shell.result(info)).toMatchObject({
             info: { status: "exited", exit: 3 },
@@ -112,7 +114,7 @@ describeUnix("durable shells", () => {
           const shell = yield* Shell.Service
           const listed = yield* shell.list()
           expect(listed.map((item) => item.id)).toEqual([started.id])
-          expect(listed[0]).toMatchObject({ pid: started.pid, metadata: { sessionID: "ses_keep" } })
+          expect(listed[0]).toMatchObject({ pid: started.pid, metadata: { sessionID: "ses_keep", durable: true } })
           expect(yield* shell.result(listed[0]!)).toMatchObject({
             info: { status: "exited", exit: 0 },
             capture: { output: "before\nafter\n" },

@@ -180,8 +180,12 @@ const layer = () =>
         // Removing a durable command is the one thing besides its own end that stops it.
         if (command.durable) {
           if (command.monitor) yield* Fiber.interrupt(command.monitor)
-          // Stop it before deleting its files: the wrapper writes its status as it goes.
-          if (command.info.status === "running") yield* ShellDurable.stop(command.durable)
+          if (command.info.status === "running") {
+            // The record goes first, so anything watching reads this as stopped on purpose even if the
+            // wrapper writes a status while it dies. Its files go once it is gone.
+            yield* Effect.promise(() => ShellDurable.dropRecord(command.durable!))
+            yield* ShellDurable.stop(command.durable)
+          }
           yield* Effect.promise(() => ShellDurable.drop(command.durable!))
         }
         // Unblock any wait still pending when the command is removed before it terminated.
@@ -440,21 +444,24 @@ const layer = () =>
               ShellDurable.spawn({ shell: invocation.shell, args, cwd: invocation.cwd, env: invocation.env, file }),
             catch: (cause) => new AppProcess.AppProcessError({ command: invocation.command, cause }),
           })
+          // Clients read this tag to know a restart will not stop the command.
+          const metadata = { ...info.metadata, durable: true }
           const entry: ShellDurable.Entry = {
             id,
             command: invocation.command,
             cwd: invocation.cwd,
             shell: invocation.shell,
             file,
-            metadata: info.metadata,
+            metadata,
             directory: location.directory,
             pid: spawned.pid,
             ...(spawned.identity !== undefined ? { identity: spawned.identity } : {}),
             started: info.time.started,
-            ...(invocation.timeout > 0 ? { deadline: info.time.started + invocation.timeout } : {}),
+            // Counted from when the command is running, as for any other command.
+            ...(invocation.timeout > 0 ? { deadline: Date.now() + invocation.timeout } : {}),
           }
           yield* Effect.promise(() => ShellDurable.save(entry))
-          const command = yield* track({ ...info, pid: spawned.pid }, entry, false)
+          const command = yield* track({ ...info, metadata, pid: spawned.pid }, entry, false)
           yield* bus.publish(Shell.Event.Created, { info: command.info })
           return command.info
         }

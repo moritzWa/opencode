@@ -219,10 +219,11 @@ export const wait = (entry: Entry, verify: boolean) =>
   Effect.gen(function* () {
     let first = verify
     for (;;) {
-      const exit = yield* Effect.promise(() => readExit(entry.file))
-      if (exit) return outcome(exit)
+      // Checked first: a command stopped on purpose may write a status as it dies, but removal wins.
       const present = yield* Effect.promise(() => exists(files(entry.file).record))
       if (!present) return { _tag: "removed" } as const
+      const exit = yield* Effect.promise(() => readExit(entry.file))
+      if (exit) return outcome(exit)
       const running = yield* Effect.promise(() => alive(entry.pid, first ? entry.identity : undefined))
       first = false
       if (!running) {
@@ -250,6 +251,12 @@ export async function save(entry: Entry) {
   const target = files(entry.file).record
   await writeFile(`${target}.tmp`, JSON.stringify(entry))
   await rename(`${target}.tmp`, target)
+}
+
+/** Marks the command as stopped on purpose, before its process is stopped. */
+export async function dropRecord(entry: Pick<Entry, "file">) {
+  const { unlink } = await import("fs/promises")
+  await unlink(files(entry.file).record).catch(() => {})
 }
 
 export async function drop(entry: Pick<Entry, "file">) {
