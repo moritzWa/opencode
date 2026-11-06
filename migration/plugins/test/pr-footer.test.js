@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { scan, worktreeName } from "../legacy/tui-plugins/pr-footer.js"
+import { scan } from "../legacy/tui-plugins/pr-footer.js"
 
 const shell = (command, output = "", workdir) => ({
   type: "assistant",
@@ -20,11 +20,4 @@ test("scan reads the PR a chat created and merged, newest first", () => {
 
 test("scan ignores pull request mentions that are not create or merge", () => {
   expect(scan([shell("gh pr view 9197", "https://github.com/acme/app/pull/9197")]).map((event) => event.pr)).toEqual([undefined])
-})
-
-test("worktreeName names the worktree even after it is deleted", () => {
-  expect(worktreeName(`${root}/.claude/worktrees/cleanup/apps/web`, root)).toBe("cleanup")
-  expect(worktreeName("/Users/m/Code/arca-router-showcase", root)).toBe("arca-router-showcase")
-  expect(worktreeName(root, root)).toBeUndefined()
-  expect(worktreeName(`${root}/apps/web`, root)).toBeUndefined()
 })

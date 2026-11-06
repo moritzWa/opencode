@@ -4,7 +4,6 @@ import { createElement, createTextNode, effect, insert, insertNode, setProp, cre
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { basename } from "path";
 var run = promisify(execFile);
 var DEFAULTS = { interval_ms: 60000 };
 var CACHE_MS = 15000;
@@ -48,14 +47,6 @@ async function isLinkedWorktree(dir) {
   const [git, common] = await Promise.all(["--git-dir", "--git-common-dir"].map((flag) => run("git", ["-C", dir, "rev-parse", "--path-format=absolute", flag]).then(({ stdout }) => stdout.trim()))).catch(() => []);
   return Boolean(git && git !== common);
 }
-function worktreeName(dir, root) {
-  if (!dir)
-    return;
-  const nested = /\/worktrees\/([^/]+)/.exec(dir);
-  if (nested)
-    return nested[1];
-  return dir === root || dir.startsWith(root + "/") ? undefined : basename(dir);
-}
 function cached(key, load) {
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS)
@@ -67,16 +58,17 @@ function cached(key, load) {
   return value;
 }
 var pull = (pr) => ({
+  branch: pr.headRefName,
   number: pr.number,
   url: pr.url,
   state: pr.isDraft && pr.state === "OPEN" ? "draft" : pr.state.toLowerCase()
 });
-var byNumber = (root, found) => cached(`${root}\x00#${found.repo ?? ""}${found.number}`, () => run("gh", ["pr", "view", String(found.number), ...found.repo ? ["--repo", found.repo] : [], "--json", "number,url,state,isDraft"], { cwd: root, timeout: 15000 }).then(({ stdout }) => pull(JSON.parse(stdout))));
+var byNumber = (root, found) => cached(`${root}\x00#${found.repo ?? ""}${found.number}`, () => run("gh", ["pr", "view", String(found.number), ...found.repo ? ["--repo", found.repo] : [], "--json", "number,url,state,isDraft,headRefName"], { cwd: root, timeout: 15000 }).then(({ stdout }) => pull(JSON.parse(stdout))));
 var byBranch = async (dir) => {
   const branch = await branchOf(dir).catch(() => "");
   if (!branch || SKIP_BRANCHES.has(branch))
     return;
-  return cached(`${dir}\x00${branch}`, () => run("gh", ["pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", "number,url,state,isDraft"], {
+  return cached(`${dir}\x00${branch}`, () => run("gh", ["pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", "number,url,state,isDraft,headRefName"], {
     cwd: dir,
     timeout: 15000
   }).then(({ stdout }) => {
@@ -84,24 +76,21 @@ var byBranch = async (dir) => {
     return pr ? pull(pr) : undefined;
   }));
 };
-async function lookup(root, messages) {
-  const events = scan(messages);
-  for (const event of events) {
-    const worktree = worktreeName(event.dir, root);
+var remembered = new Map;
+async function lookup(root, messages, sessionID) {
+  for (const event of scan(messages)) {
     if (event.pr) {
       const pr = await byNumber(root, event.pr);
-      if (pr)
-        return {
-          ...pr,
-          worktree: worktree ?? events.map((e) => e.pr?.number === pr.number ? worktreeName(e.dir, root) : undefined).find(Boolean)
-        };
+      if (pr) {
+        remembered.set(sessionID, event.pr);
+        return pr;
+      }
     }
-    if (await isLinkedWorktree(event.dir)) {
-      const pr = await byBranch(event.dir);
-      return pr && { ...pr, worktree };
-    }
+    if (await isLinkedWorktree(event.dir))
+      return byBranch(event.dir);
   }
-  return byBranch(root);
+  const earlier = remembered.get(sessionID);
+  return earlier && await byNumber(root, earlier) || byBranch(root);
 }
 function PrFooter(props) {
   const { api, options } = props;
@@ -110,7 +99,7 @@ function PrFooter(props) {
   const refresh = async (sessionID) => {
     const mine = ++generation;
     const root = api.state.session.get(sessionID)?.directory ?? api.state.path.directory;
-    const value = await lookup(root, api.state.session.messages?.(sessionID) ?? []);
+    const value = await lookup(root, api.state.session.messages?.(sessionID) ?? [], sessionID);
     if (mine === generation)
       setPr(value);
   };
@@ -152,10 +141,10 @@ function PrFooter(props) {
       const row = createElement("box");
       setProp(row, "flexDirection", "row");
       setProp(row, "gap", 1);
-      if (p.worktree) {
+      if (p.branch) {
         const name = createElement("text");
         setProp(name, "wrapMode", "none");
-        insert(name, p.worktree);
+        insert(name, p.branch.length > 28 ? p.branch.slice(0, 27) + "\u2026" : p.branch);
         effect((prev) => setProp(name, "fg", api.theme.current.textMuted, prev));
         insertNode(row, name);
       }
@@ -193,8 +182,7 @@ var pr_footer_default = { id: "pr-footer", tui };
 export {
   pr_footer_default as default,
   lookup,
-  scan,
-  worktreeName
+  scan
 };
 
-//# debugId=5A888F8AA38FCEC864756E2164756E21
+//# debugId=6E96280777D2FE5564756E2164756E21

@@ -37,7 +37,7 @@
   },
   {
     "source": "tui-plugins/pr-footer.js",
-    "sha256": "9fbff44528cec7bdb9997507916e3023118c11f1b87838c1950522fdc543e9d6"
+    "sha256": "be368f249b6d3f0919c922a643e607595f737b3e808848d0b5b5e968b37fc549"
   },
   {
     "source": "tui-plugins/session-title.js",
