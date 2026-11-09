@@ -15,7 +15,7 @@ import type { Recovery } from "../src/plugin.ts"
 const core = process.env.AUTH_RECOVERY_CORE_ROOT ?? fileURLToPath(new URL("../../../packages/core/", import.meta.url))
 const { recoveryRunnerLayer } = await import(`${core}/test/fixture/recovery-runner.ts`)
 const { testEffect } = await import(`${core}/test/lib/effect.ts`)
-const { Effect } = await import(`${core}/node_modules/effect/dist/index.js`)
+const { Effect, Exit } = await import(`${core}/node_modules/effect/dist/index.js`)
 const { AnthropicMessages } = await import(`${core}/../ai/src/protocols/anthropic-messages.ts`)
 const { Auth } = await import(`${core}/../ai/src/route.ts`)
 const { Agent } = await import(`${core}/src/agent.ts`)
@@ -86,7 +86,7 @@ for (const scenario of ["brief", "persistent", "quota", "credits"] as const) {
   cleanup.push(() => { proxy.stop() })
    const primary = AnthropicMessages.route.with({ endpoint: { baseURL: credits ? `${origin}/v1` : proxy.url }, auth: Auth.none, headers: { "x-subscription-gateway": proxy.secret } }).model({ id: "claude-opus-5-5" })
   const it = testEffect(recoveryRunnerLayer(directory, `${origin}/v1`, primary))
-   it.live(credits ? "direct API credit exhaustion passes actual Anthropic parser and runner and resumes once on Sol" : quota ? "compressed upstream 429 evidence survives actual Anthropic parser and once-only Sol recovery" : persistent ? "persistent refresh failure passes actual Anthropic parser and runner and resumes once on Sol" : "brief refresh failure stays Claude through compressed upstream SSE and actual Anthropic parser", () => Effect.gen(function* () {
+   it.live(credits ? "direct API credit exhaustion passes actual Anthropic parser and runner and resumes once on Sol" : quota ? "compressed upstream 429 evidence survives actual Anthropic parser and once-only Sol recovery" : persistent ? "persistent refresh failure stays Claude instead of switching providers" : "brief refresh failure stays Claude through compressed upstream SSE and actual Anthropic parser", () => Effect.gen(function* () {
     const sessionID = Session.ID.make(`ses_auth_${scenario}`)
     const db = (yield* Database.Service).db
     const agents = yield* Agent.Service
@@ -107,7 +107,12 @@ for (const scenario of ["brief", "persistent", "quota", "credits"] as const) {
         expect(event.response.headers.get("request-id")).toBe("synthetic-claude-quota")
       }
     }))
-    yield* hooks.register("session", "retry", (event: Parameters<typeof boundRetry>[0]) => Effect.sync(() => boundRetry(event)))
+    yield* hooks.register("session", "retry", (event: Parameters<typeof boundRetry>[0]) => Effect.sync(() => {
+      boundRetry(event)
+      // The production hook now keeps retrying a refresh outage. This fixture
+      // stops that loop so the test clock can observe that recovery does not switch.
+      if (persistent) event.decision = { retry: false }
+    }))
     yield* hooks.register("session", "recovery", (event: Recovery) => Effect.sync(() => {
       const detail = readFailure(event.error)
        expect(detail?.category).toBe(credits ? "billing" : quota ? "model_quota" : "refresh_server")
@@ -124,10 +129,12 @@ for (const scenario of ["brief", "persistent", "quota", "credits"] as const) {
       event.decision = { model: Model.Ref.parse(`${model.providerID}/${model.id}`), reason: detail.category }
     }))
     yield* sessions.prompt({ sessionID, text: "Complete outstanding request", resume: false })
-    yield* runner.drain({ sessionID, force: false })
-     expect(recoveries).toBe(persistent || quota || credits ? 1 : 0)
+    const exit = yield* Effect.exit(runner.drain({ sessionID, force: false }))
+    if (persistent) expect(Exit.isFailure(exit)).toBe(true)
+    else expect(Exit.isSuccess(exit)).toBe(true)
+     expect(recoveries).toBe(quota || credits ? 1 : 0)
     expect(claude).toBe(persistent ? 0 : 1)
-     expect(sol).toBe(persistent || quota || credits ? 1 : 0)
+     expect(sol).toBe(quota || credits ? 1 : 0)
      expect(elapsed).toBe(quota || credits ? 0 : persistent ? 75000 : 1000)
      expect(refreshes).toBe(quota || credits ? 0 : persistent ? 8 : 2)
     expect(responses).toBe(1)

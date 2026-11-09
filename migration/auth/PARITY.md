@@ -55,8 +55,9 @@ gateway, which installs the actual subscription bearer token and removes API key
   Cursor 1M model, then the unmodified model, then legacy work candidates.
   Personal requests use the existing OpenAI subscription candidate order, led by
   `openai/gpt-6.1-sol`. Personal requests can never select Cursor.
-- Auth outages use exactly `openai/gpt-6.1-sol`, for both personal and work requests:
-  this is a personal subscription route and does not add work billing exposure.
+- A network, throttle, or 5xx failure while refreshing a Claude token does not
+  leave Claude. The runner waits the outage out. Only a revoked or invalid
+  credential, or a real quota, billing, or capacity rejection, may move to Codex.
 - Auxiliary title/compaction/generate requests do not initiate primary recovery.
   Child Sessions are not detached and revived by the plugin.
 - Default model selection remains the configuration owner's decision.

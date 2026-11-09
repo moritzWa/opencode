@@ -59,7 +59,9 @@ describe("subscription auth over real HTTP", () => {
     expect(error.detail.retryAfterMs).toBe(120000)
     expect(error.detail.exhausted).toBe(true)
     expect(calls).toBe(1)
-    expect(fallback({ failure: error.detail, failed: { providerID: "anthropic", id: "claude-opus-5-5" }, available })).toEqual(available[0])
+    const moved = fallback({ failure: error.detail, failed: { providerID: "anthropic", id: "claude-opus-5-5" }, available })
+    if (status === 401) expect(moved).toEqual(available[0])
+    else expect(moved).toBeUndefined()
   })
 
   test("network failure is never quota or refresh throttle", async () => {
