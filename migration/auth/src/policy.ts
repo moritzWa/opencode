@@ -4,9 +4,13 @@ import { readFailure, type Failure } from "./failure.ts"
 
 export interface ModelRef { providerID: string; id: string }
 
+const transient = new Set(["refresh_throttle", "refresh_network", "refresh_server", "refresh_pending", "upstream_network", "model_throttle"])
+
 export function boundRetry(event: { error: { type: string; message: string; response?: { body: string } }; decision: { retry: false } | { retry: true; delay: number } }) {
   const detail = readFailure(event.error)
-  if (detail?.exhausted || detail?.category === "model_quota" || detail?.category === "billing" || detail?.category === "capacity") event.decision = { retry: false }
+  // A spent refresh budget is an outage, not a dead subscription. Keep retrying.
+  if (!detail || transient.has(detail.category)) return
+  if (detail.exhausted || detail.category === "model_quota" || detail.category === "billing" || detail.category === "capacity") event.decision = { retry: false }
 }
 export function isWork(directory?: string, code = join(homedir(), "Code")) {
   if (!directory) return false
@@ -61,7 +65,10 @@ const otherSubscription = (failed: ModelRef): ModelRef[] => {
 }
 
 export function fallback(input: { failure: Failure; failed: ModelRef; directory?: string; available: readonly ModelRef[]; tried?: readonly string[] }): ModelRef | undefined {
-  const auth = input.failure.category.startsWith("refresh_") && input.failure.exhausted
+  // Network, throttle, and 5xx refresh failures stay on Claude. Only a revoked
+  // or invalid credential, after the refresh budget, means this subscription
+  // cannot authenticate.
+  const auth = input.failure.exhausted === true && ["refresh_revoked", "refresh_invalid", "credential_store"].includes(input.failure.category)
   if (!auth && !["model_quota", "billing", "capacity"].includes(input.failure.category)) return
   return otherSubscription(input.failed).find((model) => !input.tried?.some((key) => key === `${model.providerID}/${model.id}` || key === `${model.providerID}/*`) && input.available.some((item) => item.providerID === model.providerID && item.id === model.id))
 }
