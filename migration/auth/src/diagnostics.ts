@@ -13,8 +13,16 @@ export class Diagnostics {
     chmodSync(file, 0o600)
     this.db.run("PRAGMA journal_mode=WAL")
     this.db.run("CREATE TABLE IF NOT EXISTS diagnostic (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, session TEXT, category TEXT NOT NULL, status INTEGER, reason TEXT NOT NULL, retry_after_ms INTEGER, action TEXT NOT NULL, quota_window TEXT)")
+    this.db.run("CREATE TABLE IF NOT EXISTS provider_hold (provider TEXT PRIMARY KEY, until INTEGER NOT NULL, reason TEXT NOT NULL)")
   }
-  record(failure: Failure, action: "retry_claude" | "stay_claude" | "fallback" | "stop" | "refresh_saved", session?: string) {
+  hold(provider: string, until: number, reason: string) {
+    if (!/^[a-z0-9_-]{1,64}$/.test(provider) || !Number.isFinite(until)) return
+    this.db.query("INSERT INTO provider_hold(provider, until, reason) VALUES(?,?,?) ON CONFLICT(provider) DO UPDATE SET until = excluded.until, reason = excluded.reason WHERE excluded.until > provider_hold.until").run(provider, until, safeReasons.has(reason) ? reason : "unrecognized_upstream_error")
+  }
+  holds(now = Date.now()) {
+    return (this.db.query("SELECT provider FROM provider_hold WHERE until > ?").all(now) as Array<{ provider: string }>).map((row) => row.provider)
+  }
+  record(failure: Failure, action: "retry_claude" | "stay_claude" | "fallback" | "stop" | "refresh_saved" | "other_account", session?: string) {
     this.db.transaction(() => {
       this.db.query("INSERT INTO diagnostic(at,session,category,status,reason,retry_after_ms,action,quota_window) VALUES(?,?,?,?,?,?,?,?)").run(Date.now(), session && /^ses_[a-zA-Z0-9]{1,128}$/.test(session) ? session : null, failure.category, failure.status ?? null, failure.reason === "insufficient_credits" || safeReasons.has(failure.reason) ? failure.reason : "unrecognized_upstream_error", failure.retryAfterMs ?? null, action, ["5h", "7d", "7d_opus"].includes(failure.quotaWindow ?? "") ? failure.quotaWindow ?? null : null)
       this.db.query("DELETE FROM diagnostic WHERE id <= (SELECT COALESCE(MAX(id),0)-? FROM diagnostic)").run(this.limit)

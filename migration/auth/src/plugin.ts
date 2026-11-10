@@ -8,9 +8,9 @@ import { join } from "node:path"
 import { SubscriptionAuth } from "./auth.ts"
 import { Diagnostics } from "./diagnostics.ts"
 import { legacy, accountStore } from "./legacy.ts"
-import { gateway } from "./gateway.ts"
+import { gateway, type AccountAttempt } from "./gateway.ts"
 import { ClaudeFailure, readFailure } from "./failure.ts"
-import { boundRetry, cooldown, fallback } from "./policy.ts"
+import { accountCoolMs, boundRetry, cooldown, fallback } from "./policy.ts"
 
 // Structural forward contract for the coordinated core seam. Once integrated,
 // this is exactly SessionHooks["recovery"]; no V1 event guesses are used.
@@ -35,15 +35,21 @@ export const SubscriptionPlugin: Plugin = {
     const diagnostics = new Diagnostics(typeof context.options.diagnostics === "string" ? context.options.diagnostics : join(homedir(), ".local/share/opencode-v2/claude-subscription/diagnostics.sqlite"))
     const auths = new Map(accounts.map((item) => [item.source, new SubscriptionAuth({ store: accountStore(item, modules), diagnostics })]))
     const integrationID = Integration.ID.make("anthropic")
-    const proxy = gateway({ auth: {
-      async credentials(signal, force) {
-        const connection = await context.integration.connection.active(integrationID)
-        const selected = connection ? await context.integration.connection.resolve(connection) : undefined
-        const preferred = selected?.type === "external" && typeof selected.metadata?.accountSource === "string" ? selected.metadata.accountSource : account?.source
-        const auth = preferred ? auths.get(preferred) : undefined
-        if (!auth) throw new ClaudeFailure({ category: "refresh_invalid", reason: "missing_credentials", exhausted: true })
-        return auth.credentials(signal, force)
-      },
+    const proxy = gateway({ accounts: async () => {
+      const connection = await context.integration.connection.active(integrationID).catch(() => undefined)
+      const selected = connection ? await context.integration.connection.resolve(connection).catch(() => undefined) : undefined
+      const preferred = selected?.type === "external" && typeof selected.metadata?.accountSource === "string" ? selected.metadata.accountSource : account?.source
+      const ordered = [...auths.keys()]
+      const first = preferred && auths.has(preferred) ? preferred : ordered[0]
+      const sources = first ? [first, ...ordered.filter((item) => item !== first)] : []
+      return sources.map((source): AccountAttempt => ({
+        source,
+        credentials: (signal, force) => {
+          const auth = auths.get(source)
+          if (!auth) throw new ClaudeFailure({ category: "refresh_invalid", reason: "missing_credentials", exhausted: true })
+          return auth.credentials(signal, force)
+        },
+      }))
     }, transport: modules.transport, diagnostics })
     const cooling = cooldown()
     const registrations: Registration[] = []
@@ -87,7 +93,8 @@ export const SubscriptionPlugin: Plugin = {
         const available = await context.model.list({}).then((result) => result.data).catch(() => [])
         const session = await context.session.get({ sessionID: event.sessionID }).catch(() => undefined)
         cooling.mark({ failure: detail, failed: event.model })
-        const model = fallback({ failure: detail, failed: event.model, directory: session?.location.directory, available, tried: cooling.active() })
+        if (["model_quota", "billing", "capacity"].includes(detail.category)) diagnostics.hold(event.model.providerID, detail.resetsAt ?? Date.now() + accountCoolMs(detail), detail.reason)
+        const model = fallback({ failure: detail, failed: event.model, directory: session?.location.directory, available, tried: cooling.active(), held: diagnostics.holds() })
         if (!model) { diagnostics.record(detail, "stop", event.sessionID); return }
         const selected = available.find((item) => item.providerID === model.providerID && item.id === model.id)
         if (!selected) return

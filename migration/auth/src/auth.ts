@@ -94,7 +94,7 @@ export class SubscriptionAuth {
             return next
           }
           failure = { category: "refresh_server", status: response.status, reason: "invalid_token_response" }
-        } else failure = response ? await classify(response, "refresh") : { category: "refresh_network", reason: timeout.aborted ? "timeout" : "connection_failed" }
+        } else failure = response ? await classify(response, "refresh") : { category: "refresh_network", reason: timeout.aborted ? "timeout" : "connection_failed", code: timeout.aborted ? "ETIMEDOUT" : "ECONNRESET" }
       } finally { lock?.release() }
       if (!transient(failure)) break
       const delay = Math.min(failure.retryAfterMs ?? Math.min(1000 * 2 ** attempt, 15_000), deadline - now())
