@@ -263,3 +263,24 @@ answers 503 `upstream_network` with the native code in `error.code`. Core
 a network outage. The category never triggers fallback: switching to Sol while
 offline would fail the same way and leave the Session on another model.
 `test/network.test.ts` covers the gateway side.
+
+## Last resort and return home
+
+`xai/grok-4.7` is the final fallback rung, after Claude and Codex are both out
+(held or failing). It is never a first choice.
+
+A `prompt` hook returns a session on that model to `anthropic/claude-sonnet-5-5`
+when its next prompt arrives, if Claude is not held or cooling, the session is not
+running, and Sonnet is available. If the history is over 300k tokens
+(`COMPACT_ABOVE`, measured from the last answered request) a manual compaction is
+queued first, so Sonnet reads the summary instead of the full history cold.
+Compaction always uses the `compaction` agent's model, which is Sonnet 5.5.
+
+The return writes `metadata.modelReturn` (`at`, `from`, `tokens`, `compacted`). A bare
+switch to Grok after that timestamp is a deliberate pick and stays; a switch
+committed with a recovery marker (the fallback) does not. Any failure in the hook
+is logged as `[model-return]` and leaves the session where it is.
+
+Options for tests: `upstream` (Anthropic base URL) and `compactAbove` (token
+threshold). `test/return.e2e.test.ts` runs the real server against local stand-ins
+and needs `RETURN_E2E_CLI` pointing at a V2 executable.

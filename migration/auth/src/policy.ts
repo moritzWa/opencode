@@ -83,10 +83,14 @@ const tier = (id: string) => {
   if (name.includes("astra") || name.includes("terra")) return "astra"
 }
 
+// Last resort once every subscription is out. Sessions on it return to HOME on their next prompt.
+export const LAST_RESORT: ModelRef = { providerID: "xai", id: "grok-4.7" }
+export const HOME: ModelRef = { providerID: "anthropic", id: "claude-sonnet-5-5" }
+
 const otherSubscription = (failed: ModelRef): ModelRef[] => {
   const kind = tier(failed.id)
-  if (failed.providerID === "anthropic") return (kind === "haiku" ? codexFor.haiku : kind === "opus" ? codexFor.opus : codexFor.sonnet).map((id) => ({ providerID: "openai", id }))
-  if (failed.providerID === "openai") return (kind === "luna" ? claudeFor.luna : kind === "astra" ? claudeFor.astra : claudeFor.sol).map((id) => ({ providerID: "anthropic", id }))
+  if (failed.providerID === "anthropic") return [...(kind === "haiku" ? codexFor.haiku : kind === "opus" ? codexFor.opus : codexFor.sonnet).map((id) => ({ providerID: "openai", id })), LAST_RESORT]
+  if (failed.providerID === "openai") return [...(kind === "luna" ? claudeFor.luna : kind === "astra" ? claudeFor.astra : claudeFor.sol).map((id) => ({ providerID: "anthropic", id })), LAST_RESORT]
   return []
 }
 

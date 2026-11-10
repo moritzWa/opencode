@@ -10,7 +10,8 @@ import { Diagnostics } from "./diagnostics.ts"
 import { legacy, accountStore } from "./legacy.ts"
 import { gateway, type AccountAttempt } from "./gateway.ts"
 import { ClaudeFailure, readFailure } from "./failure.ts"
-import { accountCoolMs, boundRetry, cooldown, fallback } from "./policy.ts"
+import { accountCoolMs, boundRetry, cooldown, fallback, HOME, LAST_RESORT } from "./policy.ts"
+import { decideReturn, type ReturnMessage } from "./return.ts"
 
 // Structural forward contract for the coordinated core seam. Once integrated,
 // this is exactly SessionHooks["recovery"]; no V1 event guesses are used.
@@ -23,6 +24,9 @@ export interface Recovery {
   readonly error: { type: string; message: string; response?: { body: string } }
   decision?: { model: Model.Ref; reason: string }
 }
+
+// Promise-client reads come back either as the payload or as { data: payload }.
+const unwrap = <T>(value: unknown): T => (value && typeof value === "object" && !Array.isArray(value) && "data" in value ? (value as { data: T }).data : (value as T))
 
 export const SubscriptionPlugin: Plugin = {
   id: "local.claude-subscription",
@@ -50,7 +54,7 @@ export const SubscriptionPlugin: Plugin = {
           return auth.credentials(signal, force)
         },
       }))
-    }, transport: modules.transport, diagnostics })
+    }, transport: modules.transport, diagnostics, upstream: typeof context.options.upstream === "string" ? context.options.upstream : undefined })
     const cooling = cooldown()
     const registrations: Registration[] = []
     const keep = async (pending: Promise<Registration>) => { const registration = await pending; registrations.push(registration) }
@@ -86,6 +90,36 @@ export const SubscriptionPlugin: Plugin = {
         event.headers["x-subscription-gateway"] = proxy.secret
         event.headers["x-subscription-session"] = event.sessionID
       }, { providerID: "anthropic" }))
+      // A session parked on the last-resort model returns to Sonnet on its next prompt once Claude is usable.
+      // Never block the prompt: any failure here leaves the session where it is.
+      await keep(context.session.hook("prompt", async (event) => {
+        try {
+          const session = await context.session.get({ sessionID: event.sessionID })
+          if (session.model?.providerID !== LAST_RESORT.providerID) return
+          const [available, active, messages] = await Promise.all([
+            context.model.list({}).then((result) => result.data),
+            context.session.active().then((result) => unwrap<Record<string, unknown>>(result)),
+            context.session.context({ sessionID: event.sessionID }).then((result) => unwrap<ReturnMessage[]>(result)),
+          ])
+          const decision = decideReturn({
+            model: session.model,
+            messages,
+            metadata: session.metadata,
+            held: diagnostics.holds(),
+            cooling: cooling.active(),
+            available,
+            active: event.sessionID in active,
+            compactAbove: typeof context.options.compactAbove === "number" ? context.options.compactAbove : undefined,
+          })
+          if (!decision.move) return
+          await context.session.switchModel({ sessionID: event.sessionID, model: { providerID: HOME.providerID, id: HOME.id } })
+          await context.session.update({ sessionID: event.sessionID, metadata: { ...session.metadata, modelReturn: { at: Date.now(), from: `${session.model.providerID}/${session.model.id}`, tokens: decision.tokens, compacted: decision.compact } } })
+          if (decision.compact) await context.session.compact({ sessionID: event.sessionID })
+          console.error(`[model-return] ${event.sessionID} ${session.model.providerID}/${session.model.id} -> ${HOME.providerID}/${HOME.id} (${decision.tokens} tokens${decision.compact ? ", compacting" : ""})`)
+        } catch (error) {
+          console.error(`[model-return] ${event.sessionID} left in place: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }))
       await keep(context.session.hook("retry", boundRetry))
       await keep((context.session.hook as ModelHooks<SessionHooks & { recovery: Recovery }>)("recovery", async (event) => {
         const detail = readFailure(event.error)
