@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { ClaudeFailure } from "../src/failure.ts"
 import { gateway } from "../src/gateway.ts"
 import type { legacy } from "../src/legacy.ts"
-import { boundRetry, fallback, nextAccount } from "../src/policy.ts"
+import { boundRetry, fallback, NETWORK_GIVE_UP, nextAccount } from "../src/policy.ts"
 import { failureResponse, readFailure } from "../src/failure.ts"
 
 const sonnet = { providerID: "anthropic", id: "claude-sonnet-5-5" }
@@ -20,6 +20,20 @@ describe("recovery does not leave Claude on a network blip", () => {
 
   test("an exhausted refresh throttle does not switch providers", () => {
     expect(fallback({ failure: { category: "refresh_throttle", reason: "rate_limit_error", exhausted: true, status: 429 }, failed: sonnet, available: [sol] })).toBeUndefined()
+  })
+
+  test("a connection that is still down after a few tries leaves Claude", () => {
+    const failure = { category: "upstream_network" as const, reason: "connection_failed", code: "ECONNRESET" }
+    const event = { attempt: NETWORK_GIVE_UP, error: { type: "provider.internal", message: failure.reason, response: { body: JSON.stringify({ subscription: failure }) } }, decision: { retry: true as const, delay: 1000 } }
+    boundRetry(event)
+    expect(event.decision.retry).toBe(false)
+    const grok = { providerID: "xai", id: "grok-4.7" }
+    expect(fallback({ failure, failed: sonnet, available: [sonnet, sol, grok], persistent: true })).toEqual(sol)
+    expect(fallback({ failure, failed: sonnet, available: [sonnet, sol, grok], persistent: true, held: ["openai"] })).toEqual(grok)
+    expect(fallback({ failure, failed: sonnet, available: [sonnet, sol] })).toBeUndefined()
+    const early = { attempt: NETWORK_GIVE_UP - 1, error: event.error, decision: { retry: true as const, delay: 1000 } }
+    boundRetry(early)
+    expect(early.decision.retry).toBe(true)
   })
 
   test("a real quota still moves to Codex unless that provider is already exhausted", () => {

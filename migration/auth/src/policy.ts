@@ -6,11 +6,18 @@ export interface ModelRef { providerID: string; id: string }
 
 const transient = new Set(["refresh_throttle", "refresh_network", "refresh_server", "refresh_pending", "upstream_network", "model_throttle"])
 
-export function boundRetry(event: { error: { type: string; message: string; response?: { body: string } }; decision: { retry: false } | { retry: true; delay: number } }) {
+// A dropped connection retries a few times. After that it is not a blip: leave the model
+// instead of sitting on the six-hour network allowance. Attempt numbers start at 2.
+export const NETWORK_GIVE_UP = 4
+const giveUp = new Set(["refresh_network", "upstream_network", "refresh_throttle"])
+
+export function boundRetry(event: { attempt?: number; error: { type: string; message: string; response?: { body: string } }; decision: { retry: false } | { retry: true; delay: number } }) {
   const detail = readFailure(event.error)
-  // A spent refresh budget is not a dead subscription. Keep the runner's retry,
-  // including the long network wait, instead of abandoning the model.
-  if (!detail || transient.has(detail.category)) return
+  if (!detail) return
+  if (transient.has(detail.category)) {
+    if (giveUp.has(detail.category) && (event.attempt ?? 0) >= NETWORK_GIVE_UP) event.decision = { retry: false }
+    return
+  }
   if (detail.exhausted || detail.category === "model_quota" || detail.category === "billing" || detail.category === "capacity") event.decision = { retry: false }
 }
 export function isWork(directory?: string, code = join(homedir(), "Code")) {
@@ -94,12 +101,13 @@ const otherSubscription = (failed: ModelRef): ModelRef[] => {
   return []
 }
 
-export function fallback(input: { failure: Failure; failed: ModelRef; directory?: string; available: readonly ModelRef[]; tried?: readonly string[]; held?: readonly string[] }): ModelRef | undefined {
-  // Only a revoked or invalid credential, after the refresh budget, means this
-  // subscription cannot authenticate. Network, throttle, and 5xx refresh
-  // failures are outages: the runner waits them out, and the other Claude
-  // account is tried by the gateway before this hook runs.
+export function fallback(input: { failure: Failure; failed: ModelRef; directory?: string; available: readonly ModelRef[]; tried?: readonly string[]; held?: readonly string[]; persistent?: boolean }): ModelRef | undefined {
+  // A revoked or invalid credential, after the refresh budget, means this
+  // subscription cannot authenticate. A connection or refresh throttle only
+  // leaves after boundRetry has given up (persistent). The gateway already
+  // tried the other Claude account before this hook runs.
   const auth = input.failure.exhausted === true && ["refresh_revoked", "refresh_invalid", "credential_store"].includes(input.failure.category)
-  if (!auth && !["model_quota", "billing", "capacity"].includes(input.failure.category)) return
+  const stuck = input.persistent === true && giveUp.has(input.failure.category)
+  if (!auth && !stuck && !["model_quota", "billing", "capacity"].includes(input.failure.category)) return
   return otherSubscription(input.failed).find((model) => !input.held?.includes(model.providerID) && !input.tried?.some((key) => key === `${model.providerID}/${model.id}` || key === `${model.providerID}/*`) && input.available.some((item) => item.providerID === model.providerID && item.id === model.id))
 }

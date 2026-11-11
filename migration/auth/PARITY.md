@@ -264,6 +264,13 @@ a network outage. The category never triggers fallback: switching to Sol while
 offline would fail the same way and leave the Session on another model.
 `test/network.test.ts` covers the gateway side.
 
+## A dead connection leaves after a few tries
+
+`refresh_network`, `upstream_network` and `refresh_throttle` still retry, so one
+dropped socket does not change the model. At runner attempt 4 (`NETWORK_GIVE_UP`)
+the retry hook stops and recovery moves to the other subscription, then Grok.
+A single failure still does not (`persistent` is set only after that attempt).
+
 ## Last resort and return home
 
 `xai/grok-4.7` is the final fallback rung, after Claude and Codex are both out

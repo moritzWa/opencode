@@ -10,7 +10,7 @@ import { Diagnostics } from "./diagnostics.ts"
 import { legacy, accountStore } from "./legacy.ts"
 import { gateway, type AccountAttempt } from "./gateway.ts"
 import { ClaudeFailure, readFailure } from "./failure.ts"
-import { accountCoolMs, boundRetry, cooldown, fallback, HOME, LAST_RESORT } from "./policy.ts"
+import { accountCoolMs, boundRetry, cooldown, fallback, HOME, LAST_RESORT, NETWORK_GIVE_UP } from "./policy.ts"
 import { decideReturn, type ReturnMessage } from "./return.ts"
 
 // Structural forward contract for the coordinated core seam. Once integrated,
@@ -120,7 +120,11 @@ export const SubscriptionPlugin: Plugin = {
           console.error(`[model-return] ${event.sessionID} left in place: ${error instanceof Error ? error.message : String(error)}`)
         }
       }))
-      await keep(context.session.hook("retry", boundRetry))
+      const networkAttempts = new Map<string, number>()
+      await keep(context.session.hook("retry", (event) => {
+        if (typeof event.attempt === "number") networkAttempts.set(event.sessionID, event.attempt)
+        boundRetry(event)
+      }))
       await keep((context.session.hook as ModelHooks<SessionHooks & { recovery: Recovery }>)("recovery", async (event) => {
         const detail = readFailure(event.error)
         if (!detail) return
@@ -128,7 +132,7 @@ export const SubscriptionPlugin: Plugin = {
         const session = await context.session.get({ sessionID: event.sessionID }).catch(() => undefined)
         cooling.mark({ failure: detail, failed: event.model })
         if (["model_quota", "billing", "capacity"].includes(detail.category)) diagnostics.hold(event.model.providerID, detail.resetsAt ?? Date.now() + accountCoolMs(detail), detail.reason)
-        const model = fallback({ failure: detail, failed: event.model, directory: session?.location.directory, available, tried: cooling.active(), held: diagnostics.holds() })
+        const model = fallback({ failure: detail, failed: event.model, directory: session?.location.directory, available, tried: cooling.active(), held: diagnostics.holds(), persistent: (networkAttempts.get(event.sessionID) ?? 0) >= NETWORK_GIVE_UP })
         if (!model) { diagnostics.record(detail, "stop", event.sessionID); return }
         const selected = available.find((item) => item.providerID === model.providerID && item.id === model.id)
         if (!selected) return
