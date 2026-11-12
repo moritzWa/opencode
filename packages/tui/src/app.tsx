@@ -79,7 +79,7 @@ import { SessionTabs } from "./component/session-tabs"
 import { clampSessionTabsWidth, sessionTabsFitVertically, SESSION_SIDEBAR_WIDTH } from "./ui/layout"
 import { createPaneResize } from "./ui/pane-resize"
 import { PaneResizeHandle } from "./ui/pane-resize-handle"
-import { clickedLink, clickedPath, openLink } from "./ui/link"
+import { clickedLink, clickedPath, clickedUrl, openLink } from "./ui/link"
 import { ThemeErrorToast } from "./component/theme-error-toast"
 import { createThemeSource, ThemeProvider, useTheme, useThemes } from "./context/theme"
 import { Home } from "./routes/home"
@@ -1392,7 +1392,7 @@ function App() {
           (route.data.type === "session" ? data.session.get(route.data.sessionID)?.location.directory : undefined) ??
           location.current?.directory ??
           data.location.default().directory
-        const target = clickedLink(renderer, event) ?? clickedPath(renderer, event, directory)
+        const target = clickedLink(renderer, event) ?? clickedUrl(renderer, event) ?? clickedPath(renderer, event, directory)
         if (target) return void openLink(target, directory).catch(toast.error)
         if (copyOnSelectEnabled()) Selection.copyOnSelectRelease(event, renderer, toast, clipboard)
       }}

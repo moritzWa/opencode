@@ -5,7 +5,7 @@ import { ManualClock } from "@opentui/core/testing"
 import { testRender, useRenderer } from "@opentui/solid"
 import { chmod, mkdir } from "node:fs/promises"
 import path from "node:path"
-import { clickedLink, clickedPath, openLink } from "../../src/ui/link"
+import { clickedLink, clickedPath, clickedUrl, openLink } from "../../src/ui/link"
 import { tmpdir } from "../fixture/fixture"
 
 const url = "https://example.com/catalog/moparts,2004,dodge,ram+1500,4.7l+v8,1432463,brake+pad"
@@ -152,4 +152,61 @@ test("local links open existing files and refuse programs and missing paths", as
   await expect(openLink(path.join(root.path, "run"), root.path)).rejects.toThrow("Not opening a program")
   await expect(openLink("nope/missing.xlsx", root.path)).rejects.toThrow("No such file or directory")
   await expect(openLink("ms-msdt:/id PCWDiagnostic", root.path)).rejects.toThrow("No such file or directory")
+})
+
+test("plain clicks resolve web addresses written as text, with or without a scheme, including wrapped ones", async () => {
+  const clicked: (string | undefined)[] = []
+  function Transcript() {
+    const renderer = useRenderer()
+    return (
+      <box
+        width={40}
+        onMouseUp={(event) => {
+          clicked.push(clickedUrl(renderer, event))
+        }}
+      >
+        <text>{`Live: www.arca.inc/blog/radioligand now reads it`}</text>
+        <text>{`See (https://example.com/a/b), ok`}</text>
+        <text>{`Or arca.inc/tools.`}</text>
+        <text>{`Open www.arca.inc/blog/radioligand-therapy-clinical-trials-2026 please`}</text>
+        <text>{`Not src/index.ts or notes.md/x or version 1.2.3 here`}</text>
+      </box>
+    )
+  }
+  const clock = new ManualClock()
+  const app = await testRender(() => <Transcript />, { width: 40, height: 14, clock })
+
+  try {
+    await app.renderOnce()
+    const rows = app.captureCharFrame().split("\n")
+    const click = async (y: number, text: string, offset = 1) => {
+      clock.advance(1000)
+      await app.mockMouse.click(rows[y]!.indexOf(text) + offset, y)
+    }
+    const row = (text: string) => rows.findIndex((line) => line.includes(text))
+    await click(row("Live"), "arca.inc")
+    await click(row("Live"), "radioligand")
+    await click(row("Live"), "reads")
+    await click(row("https://"), "https://")
+    await click(row("arca.inc/tools"), "arca.inc/tools")
+    await click(row("Open"), "www.arca")
+    await click(row("therapy"), "therapy")
+    await click(row("src/index"), "src/index")
+    await click(row("notes.md"), "notes.md")
+    await click(row("1.2.3"), "1.2.3")
+    expect(clicked).toEqual([
+      "https://www.arca.inc/blog/radioligand",
+      "https://www.arca.inc/blog/radioligand",
+      undefined,
+      "https://example.com/a/b",
+      "https://arca.inc/tools",
+      "https://www.arca.inc/blog/radioligand-therapy-clinical-trials-2026",
+      "https://www.arca.inc/blog/radioligand-therapy-clinical-trials-2026",
+      undefined,
+      undefined,
+      undefined,
+    ])
+  } finally {
+    app.renderer.destroy()
+  }
 })
