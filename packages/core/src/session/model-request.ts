@@ -135,8 +135,13 @@ const unsupportedMedia = (
   capabilities: Model.Capabilities,
   provider: string | undefined,
 ) => {
-  const modality = mimeToModality(mime)
-  if (!modality) return
+  const modality = mimeToModality(mime.toLowerCase())
+  // Archives and other binary tool results are durable history, not model inputs.
+  // Replace them on replay too so an earlier MCP file read cannot brick a session.
+  if (!modality) {
+    if (mime.toLowerCase().startsWith("text/")) return
+    return `File ${name ? `"${name}" ` : ""}(${mime}) was not sent to the model because this file type is not supported as input. Download it to disk and inspect it with tools instead. The original attachment is preserved in session history.`
+  }
   const unsupported = !capabilities.input.some((item) => item.startsWith(modality))
     ? modality
     : provider === "xai" && modality === "image" && !XAI_IMAGE_MIMES.has(mime.toLowerCase())

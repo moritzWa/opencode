@@ -1,10 +1,97 @@
 import { describe, expect, test } from "bun:test"
-import { Message, ToolResultPart, Media } from "@opencode/ai"
+import { LLM, Message, ToolCallPart, ToolResultPart, Media } from "@opencode/ai"
+import { Anthropic, OpenAI } from "@opencode/ai/providers"
+import { compileRequest } from "@opencode/ai/route/client"
 import { boundImages, unsupportedParts } from "@opencode/core/session/model-request"
+import { Effect } from "effect"
+import { it } from "./lib/effect"
 
 const capabilities = (input: string[]) => ({ tools: true, input, output: ["text"] })
 
 describe("SessionModelRequest.unsupportedParts", () => {
+  it.effect("compiles poisoned archive history for both Anthropic Messages and OpenAI Responses", () =>
+    Effect.gen(function* () {
+      const messages = [
+        Message.user("Read this Slack zip"),
+        Message.assistant(ToolCallPart.make({ id: "slack_zip", name: "execute", input: {} })),
+        Message.tool({
+          id: "slack_zip",
+          name: "execute",
+          resultType: "content",
+          result: [
+            { type: "text", text: "Arca-Copilot-Demo-Kit.zip" },
+            { type: "file", uri: "data:application/zip;base64,UEsDBA==", mime: "application/zip" },
+          ],
+        }),
+        Message.user("continue"),
+      ]
+      for (const model of [
+        Anthropic.configure({ apiKey: "fixture" }).model("claude-sonnet-4-5"),
+        OpenAI.configure({ apiKey: "fixture" }).responses("gpt-5.4"),
+      ]) {
+        const prepared = yield* compileRequest(
+          LLM.request({
+            model,
+            messages: unsupportedParts(messages, capabilities(["text", "image", "pdf"]), model.provider),
+          }),
+        )
+        const body = JSON.stringify(prepared.body)
+        expect(body).toContain("application/zip")
+        expect(body).toContain("Download it to disk")
+        expect(body).not.toContain("data:application/zip")
+        expect(body).not.toContain("UEsDBA==")
+      }
+    }),
+  )
+
+  test.each(["anthropic", "openai"])("keeps archived tool results from poisoning %s requests", (provider) => {
+    const zip = { type: "file" as const, uri: "data:application/zip;base64,UEsDBA==", mime: "application/zip" }
+    const messages = [
+      Message.tool(
+        ToolResultPart.make({
+          id: "slack_zip",
+          name: "execute",
+          result: { type: "content", value: [{ type: "text", text: "File: report.zip" }, zip] },
+        }),
+      ),
+      Message.user("continue"),
+    ]
+    const result = unsupportedParts(messages, capabilities(["text", "image", "pdf"]), provider)
+    expect(result[0]?.content[0]).toMatchObject({
+      type: "tool-result",
+      id: "slack_zip",
+      name: "execute",
+      result: {
+        type: "content",
+        value: [
+          { type: "text", text: "File: report.zip" },
+          { type: "text", text: expect.stringContaining("application/zip") },
+        ],
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain("UEsDBA==")
+    expect(messages[0]?.content[0]).toMatchObject({ result: { value: [{ type: "text" }, zip] } })
+    expect(result[1]).toBe(messages[1])
+  })
+
+  test("replaces unknown user binaries while preserving supported text documents", () => {
+    const text = Message.user({ type: "media", media: Media.base64("aGVsbG8=", "text/plain") })
+    const result = unsupportedParts(
+      [
+        Message.user({ type: "media", media: Media.base64("UEsDBA==", "APPLICATION/ZIP"), filename: "report.zip" }),
+        Message.user({ type: "media", media: Media.base64("AA==", "application/octet-stream") }),
+        text,
+      ],
+      capabilities(["text", "image", "pdf"]),
+    )
+    expect(result[0]?.content[0]).toMatchObject({ type: "text", text: expect.stringContaining('"report.zip"') })
+    expect(result[1]?.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("application/octet-stream"),
+    })
+    expect(result[2]).toBe(text)
+  })
+
   test("replaces unsupported user media with a visible error", () => {
     const messages = unsupportedParts(
       [
