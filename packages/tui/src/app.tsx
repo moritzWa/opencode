@@ -12,6 +12,7 @@ import { ExitProvider, useExit } from "./context/exit"
 import { EpilogueProvider } from "./context/epilogue"
 import { Selection } from "./util/selection"
 import { setSelectionDefaults } from "./util/selection-defaults"
+import { installTextareaMotion } from "./util/textarea-motion"
 import {
   CliRenderEvents,
   createCliRenderer,
@@ -238,6 +239,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const exit = { epilogue: undefined as string | undefined, reason: undefined as unknown }
   const result = yield* Effect.scoped(
     Effect.gen(function* () {
+      installTextareaMotion()
       const options = {
         externalOutputMode: "passthrough",
         targetFps: 60,
