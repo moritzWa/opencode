@@ -573,6 +573,65 @@ describe("LocationServiceMap", () => {
     ),
   )
 
+  it.live("falls back to the default model when the selected model was disabled", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              path.join(dir.path, "opencode.json"),
+              JSON.stringify({
+                providers: {
+                  disabled: {
+                    name: "Disabled",
+                    package: "@opencode/ai/providers/openai",
+                    models: { chat: { disabled: true } },
+                  },
+                },
+              }),
+            ),
+          )
+          const resolved = yield* Effect.gen(function* () {
+            const providers = yield* Provider.Service
+            const modelState = yield* Model.Service
+            yield* providers.transform((editor) => {
+              editor.update(Provider.ID.make("live"), (provider) => {
+                provider.package = "@opencode/ai/providers/openai"
+              })
+              editor.models.update(Provider.ID.make("live"), Model.ID.make("chat"), () => {})
+            })
+            const models = yield* SessionRunnerModel.Service
+            return yield* models.resolve(
+              Session.Info.make({
+                id: Session.ID.make("ses_disabled_model"),
+                projectID: Project.ID.global,
+                title: "test",
+                model: {
+                  id: Model.ID.make("chat"),
+                  providerID: Provider.ID.make("disabled"),
+                  variant: Model.VariantID.make("high"),
+                },
+                cost: Money.USD.zero,
+                tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+                location,
+              }),
+              modelState.available,
+            )
+          }).pipe(Effect.provide(LocationServiceMap.Service.get(location)))
+
+          expect(resolved.ref).toEqual(
+            Model.Ref.make({ id: Model.ID.make("chat"), providerID: Provider.ID.make("live") }),
+          )
+        }),
+      ),
+    ),
+  )
+
   it.live("explains replacements for unavailable legacy provider models", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
