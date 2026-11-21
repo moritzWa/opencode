@@ -15,9 +15,26 @@ export interface AuthOptions {
 
 const transient = (failure: Failure) => ["refresh_throttle", "refresh_network", "refresh_server"].includes(failure.category)
 
+// Plugin setup runs once per Location; refresh coordination must not.
+const accounts = new Map<string, { auth: SubscriptionAuth; references: number }>()
+
+export function sharedAuth(key: string, options: Omit<AuthOptions, "diagnostics">) {
+  const entry = accounts.get(key) ?? { auth: new SubscriptionAuth(options), references: 0 }
+  accounts.set(key, entry)
+  entry.references++
+  return {
+    auth: entry.auth,
+    release() {
+      entry.references--
+      if (entry.references === 0) accounts.delete(key)
+    },
+  }
+}
+
 export class SubscriptionAuth {
   private pending?: { promise: Promise<Credentials>; controller: AbortController; users: number }
   private cached?: Credentials
+  private cooling?: { until: number; failure: Failure }
   constructor(readonly options: AuthOptions) {}
 
   async credentials(signal: AbortSignal, force = false): Promise<Credentials> {
@@ -33,7 +50,10 @@ export class SubscriptionAuth {
     pending.users++
     try { return await this.wait(pending.promise, signal) } finally {
       pending.users--
-      if (pending.users === 0) pending.controller.abort()
+      if (pending.users === 0) {
+        if (this.pending === pending) this.pending = undefined
+        pending.controller.abort()
+      }
     }
   }
 
@@ -42,12 +62,13 @@ export class SubscriptionAuth {
     const cancelled = Promise.withResolvers<never>()
     const abort = () => cancelled.reject(signal.reason)
     signal.addEventListener("abort", abort, { once: true })
+    if (signal.aborted) abort()
     try { return await Promise.race([pending, cancelled.promise]) } finally { signal.removeEventListener("abort", abort) }
   }
 
   private async resolve(signal: AbortSignal, force: boolean): Promise<Credentials> {
     const now = this.options.now ?? Date.now
-    const deadline = now() + (this.options.budgetMs ?? 75_000)
+    const deadline = now() + (this.options.budgetMs ?? 25_000)
     const sleep = this.options.sleep ?? ((ms: number, abort: AbortSignal) => new Promise<void>((resolve, reject) => {
       const timer = setTimeout(done, ms)
       function done() { abort.removeEventListener("abort", cancel); resolve() }
@@ -60,6 +81,7 @@ export class SubscriptionAuth {
     const initial = stored && stored.expiresAt > now() + 60_000 ? stored : this.cached && this.cached.expiresAt > (stored?.expiresAt ?? 0) ? this.cached : stored
     if (!initial) throw new ClaudeFailure({ category: "credential_store", reason: "missing_credentials" })
     if (!force && initial.expiresAt > now() + 60_000) return initial
+    if (this.cooling && this.cooling.until > now()) throw new ClaudeFailure(this.cooling.failure)
     let failure: Failure = { category: "refresh_invalid", reason: "missing_refresh_token" }
     for (let attempt = 0; attempt < (this.options.maxAttempts ?? 8); attempt++) {
       signal.throwIfAborted()
@@ -97,11 +119,14 @@ export class SubscriptionAuth {
         } else failure = response ? await classify(response, "refresh") : { category: "refresh_network", reason: timeout.aborted ? "timeout" : "connection_failed", code: timeout.aborted ? "ETIMEDOUT" : "ECONNRESET" }
       } finally { lock?.release() }
       if (!transient(failure)) break
-      const delay = Math.min(failure.retryAfterMs ?? Math.min(1000 * 2 ** attempt, 15_000), deadline - now())
+      const delay = failure.retryAfterMs ?? Math.min(1000 * 2 ** attempt, 15_000)
       this.options.diagnostics?.record(failure, "retry_claude")
+      if (delay >= deadline - now()) break
       if (delay > 0) await sleep(delay, signal)
     }
     const exhausted = { ...failure, exhausted: true }
+    if (transient(failure) || failure.category === "refresh_pending")
+      this.cooling = { until: now() + Math.max(failure.retryAfterMs ?? 30_000, 1000), failure: exhausted }
     this.options.diagnostics?.record(exhausted, "stop")
     throw new ClaudeFailure(exhausted)
   }

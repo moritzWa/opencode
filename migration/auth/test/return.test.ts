@@ -12,10 +12,11 @@ const switched = (created: number): ReturnMessage => ({ type: "model-switched", 
 const base: ReturnInput = { model: grok, messages: [assistant(120_000)], held: [], cooling: [], available: [sonnet, sol, grok], active: false }
 
 describe("last-resort model", () => {
-  test("is the final rung once both subscriptions are out", () => {
+  test("is never a fallback rung even when both subscriptions are out", () => {
     expect(fallback({ failure: quota, failed: sonnet, available: [sonnet, sol, grok] })).toEqual(sol)
-    expect(fallback({ failure: quota, failed: sonnet, available: [sonnet, sol, grok], held: ["openai"] })).toEqual(grok)
-    expect(fallback({ failure: quota, failed: sol, available: [sonnet, sol, grok], held: ["anthropic"] })).toEqual(grok)
+    expect(fallback({ failure: quota, failed: sonnet, available: [sonnet, sol, grok], held: ["openai"] })).toBeUndefined()
+    expect(fallback({ failure: quota, failed: sol, available: [sonnet, sol, grok], held: ["anthropic"] })).toBeUndefined()
+    expect(fallback({ failure: quota, failed: sonnet, available: [sonnet, sol, grok], codex: false })).toBeUndefined()
   })
 
   test("is never offered when it is not available, and never falls further", () => {

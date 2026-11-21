@@ -9,13 +9,24 @@ const transient = new Set(["refresh_throttle", "refresh_network", "refresh_serve
 // A dropped connection retries a few times. After that it is not a blip: leave the model
 // instead of sitting on the six-hour network allowance. Attempt numbers start at 2.
 export const NETWORK_GIVE_UP = 4
-const giveUp = new Set(["refresh_network", "upstream_network", "refresh_throttle"])
+const giveUp = new Set(["refresh_network", "upstream_network"])
 
-export function boundRetry(event: { attempt?: number; error: { type: string; message: string; response?: { body: string } }; decision: { retry: false } | { retry: true; delay: number } }) {
+export function boundRetry(event: { attempt?: number; error: { type: string; message: string; response?: { body: string } }; decision: { retry: false } | { retry: true; delay: number } }, elsewhere = true) {
   const detail = readFailure(event.error)
   if (!detail) return
+  if (detail.exhausted && ["refresh_throttle", "refresh_server", "refresh_pending"].includes(detail.category)) {
+    event.decision = { retry: false }
+    return
+  }
+  if (detail.category === "refresh_throttle" || detail.category === "model_throttle") {
+    if (!event.decision.retry) {
+      const backoff = Math.min(1000 * 2 ** Math.max(0, (event.attempt ?? 2) - 2), 60_000)
+      event.decision = { retry: true, delay: detail.retryAfterMs ?? backoff }
+    }
+    return
+  }
   if (transient.has(detail.category)) {
-    if (giveUp.has(detail.category) && (event.attempt ?? 0) >= NETWORK_GIVE_UP) event.decision = { retry: false }
+    if (elsewhere && giveUp.has(detail.category) && (event.attempt ?? 0) >= NETWORK_GIVE_UP) event.decision = { retry: false }
     return
   }
   if (detail.exhausted || detail.category === "model_quota" || detail.category === "billing" || detail.category === "capacity") event.decision = { retry: false }
@@ -62,8 +73,7 @@ export function switchAccount(failure: Failure) {
 // an account failure. "stop" returns the error to the runner.
 export function nextAccount(failure: Failure): "stop" | "try" | "cool" {
   if (switchAccount(failure)) return "cool"
-  if (failure.category === "refresh_throttle") return "cool"
-  if (failure.category === "refresh_network" || failure.category === "refresh_server" || failure.category === "refresh_pending") return "try"
+  if (["refresh_throttle", "refresh_network", "refresh_server", "refresh_pending"].includes(failure.category)) return "try"
   return "stop"
 }
 
@@ -90,24 +100,24 @@ const tier = (id: string) => {
   if (name.includes("astra") || name.includes("terra")) return "astra"
 }
 
-// Last resort once every subscription is out. Sessions on it return to HOME on their next prompt.
+// Recognize historical Grok sessions for return-to-Claude only. Never select it for recovery.
 export const LAST_RESORT: ModelRef = { providerID: "xai", id: "grok-4.7" }
 export const HOME: ModelRef = { providerID: "anthropic", id: "claude-sonnet-5-5" }
 
-const otherSubscription = (failed: ModelRef): ModelRef[] => {
+const otherSubscription = (failed: ModelRef, codex = true): ModelRef[] => {
   const kind = tier(failed.id)
-  if (failed.providerID === "anthropic") return [...(kind === "haiku" ? codexFor.haiku : kind === "opus" ? codexFor.opus : codexFor.sonnet).map((id) => ({ providerID: "openai", id })), LAST_RESORT]
-  if (failed.providerID === "openai") return [...(kind === "luna" ? claudeFor.luna : kind === "astra" ? claudeFor.astra : claudeFor.sol).map((id) => ({ providerID: "anthropic", id })), LAST_RESORT]
+  if (failed.providerID === "anthropic" && !codex) return []
+  if (failed.providerID === "anthropic") return (kind === "haiku" ? codexFor.haiku : kind === "opus" ? codexFor.opus : codexFor.sonnet).map((id) => ({ providerID: "openai", id }))
+  if (failed.providerID === "openai") return (kind === "luna" ? claudeFor.luna : kind === "astra" ? claudeFor.astra : claudeFor.sol).map((id) => ({ providerID: "anthropic", id }))
   return []
 }
 
-export function fallback(input: { failure: Failure; failed: ModelRef; directory?: string; available: readonly ModelRef[]; tried?: readonly string[]; held?: readonly string[]; persistent?: boolean }): ModelRef | undefined {
-  // A revoked or invalid credential, after the refresh budget, means this
-  // subscription cannot authenticate. A connection or refresh throttle only
-  // leaves after boundRetry has given up (persistent). The gateway already
-  // tried the other Claude account before this hook runs.
-  const auth = input.failure.exhausted === true && ["refresh_revoked", "refresh_invalid", "credential_store"].includes(input.failure.category)
+export function fallback(input: { failure: Failure; failed: ModelRef; directory?: string; available: readonly ModelRef[]; tried?: readonly string[]; held?: readonly string[]; persistent?: boolean; codex?: boolean }): ModelRef | undefined {
+  // Exhausting authentication includes persistent refresh throttles, not model
+  // throttles. The gateway already tried the other account within one budget.
+  // Network failures still require evidence of a persistent, provider-specific outage.
+  const auth = input.failure.exhausted === true && ["refresh_revoked", "refresh_invalid", "credential_store", "refresh_throttle", "refresh_server", "refresh_pending"].includes(input.failure.category)
   const stuck = input.persistent === true && giveUp.has(input.failure.category)
   if (!auth && !stuck && !["model_quota", "billing", "capacity"].includes(input.failure.category)) return
-  return otherSubscription(input.failed).find((model) => !input.held?.includes(model.providerID) && !input.tried?.some((key) => key === `${model.providerID}/${model.id}` || key === `${model.providerID}/*`) && input.available.some((item) => item.providerID === model.providerID && item.id === model.id))
+  return otherSubscription(input.failed, input.codex).find((model) => !input.held?.includes(model.providerID) && !input.tried?.some((key) => key === `${model.providerID}/${model.id}` || key === `${model.providerID}/*`) && input.available.some((item) => item.providerID === model.providerID && item.id === model.id))
 }

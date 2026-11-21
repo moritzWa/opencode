@@ -18,7 +18,7 @@ import type { StreamOptions } from "@opencode/ai/route"
 import type { SessionCompactionResult } from "@opencode/plugin/effect/session"
 import type { SessionError } from "@opencode/schema/session-error"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
-import { Context, Effect, Layer, Result, Stream } from "effect"
+import { Clock, Context, Effect, Layer, Result, Stream } from "effect"
 import { Agent } from "../agent.js"
 import { Bus } from "../bus.js"
 import { Database } from "../database/database.js"
@@ -34,6 +34,7 @@ import { SessionModelRequest } from "./model-request.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { SessionRunnerModel } from "./runner/model.js"
 import { SessionRunnerRetry } from "./runner/retry.js"
+import { SessionWatchdog } from "./runner/watchdog.js"
 import { toLLMMessages } from "./runner/to-llm-message.js"
 import { contentFilterError, toSessionError } from "./to-session-error.js"
 import { SessionUsage } from "./usage.js"
@@ -324,20 +325,20 @@ export const layer = Layer.effect(
 
       // Hooks saw the request without the summary prompt, so it is appended here. A reply that ignores the
       // template gets one reminder before it counts as a failure.
-      const send = (request: LLMRequest) =>
+      const send = (request: LLMRequest, activity: SessionWatchdog.Activity) =>
         Effect.gen(function* () {
           const prompted = fitOutput(
             LLMRequest.update(request, { messages: [...request.messages, Message.user(prompt)] }),
             context.model.limit,
           )
-          const reply = yield* stream(context, prompted, prepared.options)
+          const reply = yield* stream(context, prompted, prepared.options, activity)
           if (filled(reply.text)) return { ...reply, recent: split.recent }
 
           const nudged = fitOutput(
             LLMRequest.update(prompted, { messages: [...prompted.messages, Message.user(NUDGE)] }),
             context.model.limit,
           )
-          const retry = yield* stream(context, nudged, prepared.options)
+          const retry = yield* stream(context, nudged, prepared.options, activity)
           if (filled(retry.text)) return { ...retry, recent: split.recent }
           return yield* Effect.fail<Failure>({
             error: {
@@ -430,7 +431,7 @@ export const layer = Layer.effect(
       prepared: Prepared,
       recent: string,
       target: number,
-      send: (request: LLMRequest) => Effect.Effect<Result, AIError | Failure>,
+      send: (request: LLMRequest, activity: SessionWatchdog.Activity) => Effect.Effect<Result, AIError | Failure>,
     ): Effect.fn.Return<Result, Failure> {
       const context = trigger.context
       // The runner opened the manual compaction's message when it delivered the `/compact` item.
@@ -441,62 +442,76 @@ export const layer = Layer.effect(
       if (prepared.event.result) return yield* fromHook(context, prepared.event.result, recent)
 
       const policy = yield* SessionRunnerRetry.policy(context.session.id)
+      // Retries share the same silence clock. A transport failure is not progress.
+      const activity = { at: yield* Clock.currentTimeMillis, tools: 0 }
       let rejections = 0
       let rejected: number | undefined
       let asText = false
 
-      while (true) {
-        const fits = !asText && estimateRequest(prepared.request) <= target
-        const request = fits
-          ? prepared.request
-          : (flattenAndDropOldest(prepared.request, context, target) ??
-            (rejections > 0
-              ? undefined
-              : asText
-                ? flattenAndDropOldest(prepared.request, context, Number.POSITIVE_INFINITY)
-                : prepared.request))
-        if (!request) {
-          return yield* Effect.fail<Failure>({
-            error: {
-              type: "compaction.failed",
-              message:
-                "The compaction request cannot be reduced further without losing the latest exchange or checkpoint",
-            },
+      return yield* Effect.gen(function* () {
+        while (true) {
+          const fits = !asText && estimateRequest(prepared.request) <= target
+          const request = fits
+            ? prepared.request
+            : (flattenAndDropOldest(prepared.request, context, target) ??
+              (rejections > 0
+                ? undefined
+                : asText
+                  ? flattenAndDropOldest(prepared.request, context, Number.POSITIVE_INFINITY)
+                  : prepared.request))
+          if (!request) {
+            return yield* Effect.fail<Failure>({
+              error: {
+                type: "compaction.failed",
+                message:
+                  "The compaction request cannot be reduced further without losing the latest exchange or checkpoint",
+              },
+            })
+          }
+
+          const attempt = yield* Effect.result(send(request, activity))
+          if (Result.isSuccess(attempt)) return attempt.success
+          const cause = attempt.failure
+          if (!(cause instanceof AIError)) return yield* Effect.fail(cause)
+          const error = toSessionError(cause)
+          const tooLarge = cause.reason._tag === "InvalidRequest" && cause.reason.classification === "payload-too-large"
+
+          if (tooLarge && request === prepared.request) {
+            asText = true
+            continue
+          }
+
+          if (tooLarge || isContextOverflowFailure(cause)) {
+            const step = SHRINK_STEPS[rejections]
+            if (step === undefined) return yield* Effect.fail<Failure>({ error })
+            rejected ??= estimateRequest(request)
+            target = Math.floor(rejected * step)
+            rejections++
+            continue
+          }
+
+          const decision = yield* policy({
+            cause,
+            error,
+            agent: context.agent.id,
+            model: context.model.ref,
+            hook: prepared.retry,
+            retry: SessionRunnerRetry.isRetryable(cause),
           })
+          if (!decision.retry) return yield* Effect.fail<Failure>({ error })
+          yield* bus.publish(SessionEvent.Synthetic, {
+            sessionID: context.session.id,
+            text: `Context compaction retry ${decision.attempt} on ${context.model.ref.providerID}/${context.model.ref.id} in ${Math.ceil(decision.delay / 1000)} seconds: ${error.message}`,
+            metadata: { source: "compaction", notice: "retry", attempt: decision.attempt },
+          })
+          yield* Effect.sleep(decision.delay)
         }
-
-        const attempt = yield* Effect.result(send(request))
-        if (Result.isSuccess(attempt)) return attempt.success
-        const cause = attempt.failure
-        if (!(cause instanceof AIError)) return yield* Effect.fail(cause)
-        const error = toSessionError(cause)
-        const tooLarge = cause.reason._tag === "InvalidRequest" && cause.reason.classification === "payload-too-large"
-
-        if (tooLarge && request === prepared.request) {
-          asText = true
-          continue
-        }
-
-        if (tooLarge || isContextOverflowFailure(cause)) {
-          const step = SHRINK_STEPS[rejections]
-          if (step === undefined) return yield* Effect.fail<Failure>({ error })
-          rejected ??= estimateRequest(request)
-          target = Math.floor(rejected * step)
-          rejections++
-          continue
-        }
-
-        const decision = yield* policy({
-          cause,
-          error,
-          agent: context.agent.id,
-          model: context.model.ref,
-          hook: prepared.retry,
-          retry: SessionRunnerRetry.isRetryable(cause),
-        })
-        if (!decision.retry) return yield* Effect.fail<Failure>({ error })
-        yield* Effect.sleep(decision.delay)
-      }
+      }).pipe(
+        Effect.raceFirst(SessionWatchdog.watch(activity)),
+        Effect.catch((error) =>
+          Effect.fail<Failure>(error instanceof AIError ? { error: toSessionError(error) } : error),
+        ),
+      )
     })
 
     /**
@@ -548,12 +563,26 @@ export const layer = Layer.effect(
       })
     }
 
-    const stream = (context: SessionContext.Loaded, request: LLMRequest, options: StreamOptions) => {
+    const stream = (
+      context: SessionContext.Loaded,
+      request: LLMRequest,
+      options: StreamOptions,
+      activity: SessionWatchdog.Activity,
+    ) => {
       const sessionID = context.session.id
       const metadataKey = context.model.model.route.providerMetadataKey ?? context.model.model.provider
       const unusable = (error: SessionError.Error) => Effect.fail<Failure>({ error })
 
       return llm.stream(request, options).pipe(
+        Stream.tap(() =>
+          Clock.currentTimeMillis.pipe(
+            Effect.tap((now) =>
+              Effect.sync(() => {
+                activity.at = now
+              }),
+            ),
+          ),
+        ),
         Stream.runFoldEffect(
           (): Streamed => ({ text: "" }),
           (streamed, event): Effect.Effect<Streamed, AIError | Failure> => {
@@ -733,7 +762,10 @@ export const node = makeLocationNode({
 /** Anything since the previous compaction beyond one assistant message counts as progress. */
 const madeProgress = (context: SessionContext.Loaded) => {
   const since = previousCompaction(context.messages) ? context.messages.slice(1) : context.messages
-  return since.some((message) => message.type === "user") || since.filter((message) => message.type === "assistant").length > 1
+  return (
+    since.some((message) => message.type === "user") ||
+    since.filter((message) => message.type === "assistant").length > 1
+  )
 }
 
 /** History loads from the latest completed compaction, so a previous one is always the first message. */

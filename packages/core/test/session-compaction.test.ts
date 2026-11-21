@@ -7,6 +7,7 @@ import {
   LLMEvent,
   LanguageModel,
   ToolDefinition,
+  TransportError,
   type LLMRequest,
 } from "@opencode/ai"
 import { OpenAIChat } from "@opencode/ai/protocols"
@@ -39,8 +40,10 @@ import { Model } from "@opencode/schema/model"
 import { Skill } from "@opencode/schema/skill"
 import { Shell } from "@opencode/schema/shell"
 import { DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import { asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
+import { advance } from "./lib/clock"
 
 let requests: LLMRequest[] = []
 const model = LanguageModel.make({
@@ -61,6 +64,18 @@ const cost = [
 const client = Layer.mock(LLMClient.Service)({
   stream: (request: LLMRequest) => {
     requests.push(request)
+    if (request.model.id === "silent-summary") return Stream.never
+    if (request.model.id === "retry-summary")
+      return Stream.fail(
+        new AIError({
+          reason: new TransportError({
+            message: "Connection reset during compaction",
+            transport: "http",
+            operation: "read",
+            code: "ECONNRESET",
+          }),
+        }),
+      )
     if (request.model.id === "unavailable-summarizer")
       return Stream.fail(new AIError({ reason: new AuthenticationError({ message: "Pinned summarizer unavailable" }) }))
     return Stream.make(
@@ -325,9 +340,9 @@ it.effect("auto compaction estimates current content against the buffered prompt
     // history we would send is small, so another compaction cannot help and must not repeat forever.
     const summary = { ...checkpoint, summary: "short" }
     expect(yield* due({ ...grown, messages: [summary, assistant] })).toBe(false)
-    expect(yield* due({ ...grown, messages: [summary, assistant, { ...assistant, id: SessionMessage.ID.create() }] })).toBe(
-      false,
-    )
+    expect(
+      yield* due({ ...grown, messages: [summary, assistant, { ...assistant, id: SessionMessage.ID.create() }] }),
+    ).toBe(false)
     // Content that really grew since the summary still compacts.
     const huge = SessionMessage.AssistantTool.make({
       ...tool,
@@ -373,6 +388,52 @@ const loaded = (session: Session.Info, messages: readonly SessionMessage.Info[])
   agent: { id: Agent.defaultID, info: Agent.Info.default(Agent.defaultID) },
   initial: "Session instructions",
   tools: { definitions: [], execute: () => Effect.die("Compaction must not execute tools") },
+})
+
+Array.of("silent-summary", "retry-summary").forEach((id) => {
+  it.effect(`bounds ${id} compaction and settles its running marker`, () =>
+    Effect.gen(function* () {
+      requests = []
+      const session = yield* insertSession(Session.ID.make(`ses_${id.replaceAll("-", "_")}`))
+      const compaction = yield* SessionCompaction.Service
+      const store = yield* SessionStore.Service
+      const hooks = yield* PluginHooks.Service
+      yield* hooks.register("session", "retry", (event) =>
+        Effect.sync(() => {
+          event.decision = { retry: true, delay: 60_000 }
+        }),
+      )
+      const user = SessionMessage.User.make({
+        id: SessionMessage.ID.create(),
+        type: "user",
+        text: "Summarize my work",
+        time: { created: DateTime.makeUnsafe(0) },
+      })
+      const context = {
+        ...loaded(session, [user]),
+        model: SessionRunnerModel.resolved(LanguageModel.make({ id, provider: "test", route: OpenAIChat.route }), {
+          capabilities: resolved.capabilities,
+          cost: [],
+          limit: resolved.limit,
+        }),
+      }
+      const fiber = yield* compaction
+        .compact({ reason: "overflow", context })
+        .pipe(Effect.forkChild({ startImmediately: true }))
+      yield* advance(() => requests.some((request) => request.model.id === id))
+      yield* TestClock.adjust("31 minutes")
+      yield* advance(() => fiber.pollUnsafe() !== undefined)
+      expect(yield* Fiber.join(fiber)).toMatchObject({ status: "failed", error: { type: "provider.timeout" } })
+      const messages = yield* store.context(session.id)
+      expect(messages.find((message) => message.type === "compaction")).toMatchObject({ status: "failed" })
+      if (id === "retry-summary") {
+        expect(
+          messages.some((message) => message.type === "synthetic" && message.text.includes("Context compaction retry")),
+        ).toBe(true)
+        expect(requests.length).toBeGreaterThan(1)
+      }
+    }),
+  )
 })
 
 it.effect("falls back from a pinned compaction model without leaving an orphan compaction", () =>
@@ -426,7 +487,8 @@ it.effect("stops automatic compaction after repeated compactions with no progres
       time: { created: 0, completed: 0 },
     })
     const stuck = loaded(session, [summary, assistant])
-    const failure = (outcome: SessionCompaction.Outcome) => (outcome.status === "failed" ? outcome.error.type : undefined)
+    const failure = (outcome: SessionCompaction.Outcome) =>
+      outcome.status === "failed" ? outcome.error.type : undefined
 
     expect(failure(yield* compaction.compact({ reason: "auto", context: stuck }))).not.toBe("compaction.looping")
     expect(failure(yield* compaction.compact({ reason: "auto", context: stuck }))).not.toBe("compaction.looping")
@@ -439,9 +501,9 @@ it.effect("stops automatic compaction after repeated compactions with no progres
       text: "Keep going",
       time: { created: DateTime.makeUnsafe(0) },
     })
-    expect(failure(yield* compaction.compact({ reason: "auto", context: loaded(session, [summary, user, assistant]) }))).not.toBe(
-      "compaction.looping",
-    )
+    expect(
+      failure(yield* compaction.compact({ reason: "auto", context: loaded(session, [summary, user, assistant]) })),
+    ).not.toBe("compaction.looping")
   }),
 )
 

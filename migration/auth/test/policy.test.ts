@@ -18,18 +18,22 @@ describe("recovery does not leave Claude on a network blip", () => {
     expect(event.decision.retry).toBe(true)
   })
 
-  test("an exhausted refresh throttle does not switch providers", () => {
-    expect(fallback({ failure: { category: "refresh_throttle", reason: "rate_limit_error", exhausted: true, status: 429 }, failed: sonnet, available: [sol] })).toBeUndefined()
+  test("an exhausted refresh throttle switches to Sol after the auth budget", () => {
+    const failure = { category: "refresh_throttle" as const, reason: "rate_limit_error", exhausted: true, status: 429 }
+    expect(fallback({ failure, failed: sonnet, available: [sol] })).toEqual(sol)
+    const event = { error: { type: "provider.error", message: failure.reason, response: { body: JSON.stringify({ subscription: failure }) } }, decision: { retry: true as const, delay: 1000 } as { retry: true; delay: number } | { retry: false } }
+    boundRetry(event)
+    expect(event.decision.retry).toBe(false)
   })
 
   test("a connection that is still down after a few tries leaves Claude", () => {
     const failure = { category: "upstream_network" as const, reason: "connection_failed", code: "ECONNRESET" }
-    const event = { attempt: NETWORK_GIVE_UP, error: { type: "provider.internal", message: failure.reason, response: { body: JSON.stringify({ subscription: failure }) } }, decision: { retry: true as const, delay: 1000 } }
+    const event = { attempt: NETWORK_GIVE_UP, error: { type: "provider.internal", message: failure.reason, response: { body: JSON.stringify({ subscription: failure }) } }, decision: { retry: true as const, delay: 1000 } as { retry: true; delay: number } | { retry: false } }
     boundRetry(event)
     expect(event.decision.retry).toBe(false)
     const grok = { providerID: "xai", id: "grok-4.7" }
     expect(fallback({ failure, failed: sonnet, available: [sonnet, sol, grok], persistent: true })).toEqual(sol)
-    expect(fallback({ failure, failed: sonnet, available: [sonnet, sol, grok], persistent: true, held: ["openai"] })).toEqual(grok)
+    expect(fallback({ failure, failed: sonnet, available: [sonnet, sol, grok], persistent: true, held: ["openai"] })).toBeUndefined()
     expect(fallback({ failure, failed: sonnet, available: [sonnet, sol] })).toBeUndefined()
     const early = { attempt: NETWORK_GIVE_UP - 1, error: event.error, decision: { retry: true as const, delay: 1000 } }
     boundRetry(early)
@@ -40,6 +44,13 @@ describe("recovery does not leave Claude on a network blip", () => {
     const failure = { category: "model_quota" as const, reason: "quota_exceeded" }
     expect(fallback({ failure, failed: sonnet, available: [sol] })).toEqual(sol)
     expect(fallback({ failure, failed: sonnet, available: [sol], held: ["openai"] })).toBeUndefined()
+  })
+
+  test("a network failure does not change providers when the other provider is unreachable too", () => {
+    const failure = { category: "upstream_network", reason: "connection_failed", code: "ENOTFOUND" }
+    const event = { attempt: NETWORK_GIVE_UP, error: { type: "provider.error", message: failure.reason, response: { body: JSON.stringify({ subscription: failure }) } }, decision: { retry: true as const, delay: 1000 } }
+    boundRetry(event, false)
+    expect(event.decision.retry).toBe(true)
   })
 
   test("a revoked credential still leaves Claude", () => {
@@ -96,7 +107,7 @@ describe("gateway account hop on a refresh outage", () => {
         { source: "second", credentials: async () => ({ accessToken: "live" }) },
       ],
       transport,
-      upstream: upstream.url,
+      upstream: upstream.url.toString(),
     })
     const response = await fetch(`${proxy.url}/messages`, {
       method: "POST",

@@ -60,8 +60,7 @@ describe("subscription auth over real HTTP", () => {
     expect(error.detail.exhausted).toBe(true)
     expect(calls).toBe(1)
     const moved = fallback({ failure: error.detail, failed: { providerID: "anthropic", id: "claude-opus-5-5" }, available })
-    if (status === 401) expect(moved).toEqual(available[0])
-    else expect(moved).toBeUndefined()
+    expect(moved).toEqual(available[0])
   })
 
   test("network failure is never quota or refresh throttle", async () => {
@@ -152,7 +151,8 @@ test("licensed V1 transport reused without setup; gateway carries structured ref
   const disk = store()
   let calls = 0
   const tokenURL = endpoint(() => { calls++; return Response.json({ error: "overloaded_error" }, { status: 502 }) })
-  const proxy = gateway({ auth: new SubscriptionAuth({ store: disk, tokenURL, maxAttempts: 1, sleep: async () => {} }), transport: modules.transport })
+  const auth = new SubscriptionAuth({ store: disk, tokenURL, maxAttempts: 1, sleep: async () => {} })
+  const proxy = gateway({ accounts: () => [{ source: "test", credentials: (signal, force) => auth.credentials(signal, force) }], transport: modules.transport })
   cleanup.push(() => { proxy.stop() })
   const response = await fetch(`${proxy.url}/messages`, { method: "POST", headers: { "x-subscription-gateway": proxy.secret }, body: JSON.stringify({ model: "claude-opus-5-5", messages: [] }) })
   const detail = readFailure({ response: { body: await response.text() } })
@@ -179,7 +179,8 @@ test("real gateway applies subscription identity/billing/auth and reverses fragm
     const encoder = new TextEncoder()
     return new Response(new ReadableStream({ start(controller) { controller.enqueue(encoder.encode('event: content_block_start\ndata: {"content_block":{"type":"tool_use","name":"mcp_')); controller.enqueue(encoder.encode('Read","id":"tool1","input":{}}}\n\n')); controller.close() } }), { headers: { "content-type": "text/event-stream" } })
   })
-  const proxy = gateway({ auth: new SubscriptionAuth({ store: disk }), transport: modules.transport, upstream })
+  const auth = new SubscriptionAuth({ store: disk })
+  const proxy = gateway({ accounts: () => [{ source: "test", credentials: (signal, force) => auth.credentials(signal, force) }], transport: modules.transport, upstream })
   cleanup.push(() => { proxy.stop() })
   const response = await fetch(`${proxy.url}/messages`, { method: "POST", headers: { "x-subscription-gateway": proxy.secret, "x-api-key": "must-be-removed" }, body: JSON.stringify({ model: "claude-opus-5-5", system: [{ type: "text", text: "OpenCode instructions" }], messages: [{ role: "user", content: "read" }], tools: [{ name: "read", input_schema: { type: "object" } }] }) })
   expect(response.status).toBe(200)

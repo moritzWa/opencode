@@ -32,10 +32,11 @@ const modules = await legacy(process.env.CLAUDE_AUTH_TEST_ROOT)
 const cleanup: Array<() => void> = []
 afterAll(() => cleanup.reverse().forEach((fn) => fn()))
 
-for (const scenario of ["brief", "persistent", "quota", "credits"] as const) {
+for (const scenario of ["brief", "persistent", "throttle", "quota", "credits"] as const) {
   const persistent = scenario === "persistent"
   const quota = scenario === "quota"
   const credits = scenario === "credits"
+  const throttle = scenario === "throttle"
   const directory = mkdtempSync(join(tmpdir(), "auth-runner-"))
   cleanup.push(() => rmSync(directory, { recursive: true, force: true }))
   const file = join(directory, "credentials.json")
@@ -49,6 +50,7 @@ for (const scenario of ["brief", "persistent", "quota", "credits"] as const) {
     async fetch(request) {
       if (new URL(request.url).pathname === "/token") {
         refreshes++
+        if (throttle) return Response.json({ error: "rate_limit_error" }, { status: 429, headers: { "retry-after": "120" } })
         return persistent || refreshes === 1 ? Response.json({ error: "overloaded_error" }, { status: 503 }) : Response.json({ access_token: "fresh", refresh_token: "rotated", expires_in: 3600 })
       }
       if (new URL(request.url).pathname === "/v1/messages") {
@@ -82,11 +84,11 @@ for (const scenario of ["brief", "persistent", "quota", "credits"] as const) {
     store: { read: async () => JSON.parse(readFileSync(file, "utf8")), write: async (next) => { writeFileSync(file, JSON.stringify(next)); return true } },
     tokenURL: `${origin}/token`, now: () => elapsed, sleep: async (ms) => { elapsed += ms },
   })
-  const proxy = gateway({ auth, transport: modules.transport, upstream: origin })
+   const proxy = gateway({ accounts: () => [{ source: "test", credentials: (signal, force) => auth.credentials(signal, force) }], transport: modules.transport, upstream: origin })
   cleanup.push(() => { proxy.stop() })
    const primary = AnthropicMessages.route.with({ endpoint: { baseURL: credits ? `${origin}/v1` : proxy.url }, auth: Auth.none, headers: { "x-subscription-gateway": proxy.secret } }).model({ id: "claude-opus-5-5" })
   const it = testEffect(recoveryRunnerLayer(directory, `${origin}/v1`, primary))
-   it.live(credits ? "direct API credit exhaustion passes actual Anthropic parser and runner and resumes once on Sol" : quota ? "compressed upstream 429 evidence survives actual Anthropic parser and once-only Sol recovery" : persistent ? "persistent refresh failure stays Claude instead of switching providers" : "brief refresh failure stays Claude through compressed upstream SSE and actual Anthropic parser", () => Effect.gen(function* () {
+    it.live(credits ? "direct API credit exhaustion passes actual Anthropic parser and runner and resumes once on Sol" : quota ? "compressed upstream 429 evidence survives actual Anthropic parser and once-only Sol recovery" : throttle ? "refresh 429 remains structured and resumes exactly once on Sol" : persistent ? "exhausted refresh server failure resumes on Sol" : "brief refresh failure stays Claude through compressed upstream SSE and actual Anthropic parser", () => Effect.gen(function* () {
     const sessionID = Session.ID.make(`ses_auth_${scenario}`)
     const db = (yield* Database.Service).db
     const agents = yield* Agent.Service
@@ -109,14 +111,11 @@ for (const scenario of ["brief", "persistent", "quota", "credits"] as const) {
     }))
     yield* hooks.register("session", "retry", (event: Parameters<typeof boundRetry>[0]) => Effect.sync(() => {
       boundRetry(event)
-      // The production hook now keeps retrying a refresh outage. This fixture
-      // stops that loop so the test clock can observe that recovery does not switch.
-      if (persistent) event.decision = { retry: false }
     }))
     yield* hooks.register("session", "recovery", (event: Recovery) => Effect.sync(() => {
       const detail = readFailure(event.error)
-       expect(detail?.category).toBe(credits ? "billing" : quota ? "model_quota" : "refresh_server")
-       expect(detail?.status).toBe(credits ? 400 : quota ? 429 : 503)
+        expect(detail?.category).toBe(credits ? "billing" : quota ? "model_quota" : throttle ? "refresh_throttle" : "refresh_server")
+        expect(detail?.status).toBe(credits ? 400 : quota || throttle ? 429 : 503)
       if (quota) {
         expect(detail?.reason).toBe("rate_limit_error")
         expect(detail?.quotaWindow).toBe("5h")
@@ -130,13 +129,12 @@ for (const scenario of ["brief", "persistent", "quota", "credits"] as const) {
     }))
     yield* sessions.prompt({ sessionID, text: "Complete outstanding request", resume: false })
     const exit = yield* Effect.exit(runner.drain({ sessionID, force: false }))
-    if (persistent) expect(Exit.isFailure(exit)).toBe(true)
-    else expect(Exit.isSuccess(exit)).toBe(true)
-     expect(recoveries).toBe(quota || credits ? 1 : 0)
-    expect(claude).toBe(persistent ? 0 : 1)
-     expect(sol).toBe(quota || credits ? 1 : 0)
-     expect(elapsed).toBe(quota || credits ? 0 : persistent ? 75000 : 1000)
-     expect(refreshes).toBe(quota || credits ? 0 : persistent ? 8 : 2)
+     expect(Exit.isSuccess(exit)).toBe(true)
+      expect(recoveries).toBe(scenario === "brief" ? 0 : 1)
+     expect(claude).toBe(persistent || throttle ? 0 : 1)
+      expect(sol).toBe(scenario === "brief" ? 0 : 1)
+      expect(elapsed).toBe(quota || credits || throttle ? 0 : persistent ? 15000 : 1000)
+      expect(refreshes).toBe(quota || credits ? 0 : persistent ? 5 : throttle ? 1 : 2)
     expect(responses).toBe(1)
   }))
 }

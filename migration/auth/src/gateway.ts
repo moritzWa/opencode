@@ -13,6 +13,7 @@ export function gateway(options: {
   transport: Awaited<ReturnType<typeof legacy>>["transport"]
   diagnostics?: Diagnostics
   upstream?: string
+  authBudgetMs?: number
 }) {
   const secret = crypto.randomUUID()
   const cooling = new Map<string, number>()
@@ -28,7 +29,11 @@ export function gateway(options: {
       parsed.system = system.some((item) => item.text?.startsWith(options.transport.SYSTEM_IDENTITY)) ? system : [{ type: "text", text: options.transport.SYSTEM_IDENTITY }, ...system]
       const body = JSON.stringify(parsed)
       const model = parsed.model
-      const accounts = (await options.accounts()).filter((item) => (cooling.get(item.source) ?? 0) <= Date.now())
+      // One authentication budget covers account discovery, refresh and every account hop.
+      // It must finish with a structured failure before Core's 90-second header limit.
+      const authSignal = AbortSignal.any([request.signal, AbortSignal.timeout(options.authBudgetMs ?? 60_000)])
+      const accounts = (await authenticate(Promise.resolve(options.accounts()), authSignal, request.signal))
+        .filter((item) => (cooling.get(item.source) ?? 0) <= Date.now())
       if (accounts.length === 0) return failureResponse({ category: "model_quota", reason: "quota_exceeded", exhausted: true })
       const send = (access: string) => {
         const headers = forwardedHeaders(options.transport.buildRequestHeaders(request, {}, access, model, options.transport.getExcludedBetas(model)))
@@ -41,10 +46,21 @@ export function gateway(options: {
       }
       let last: Failure | undefined
       for (const [index, account] of accounts.entries()) {
-        const sent = await attempt(account, send, request.signal, model, options.transport)
+        const sent = await attempt({
+          ...account,
+          credentials: (signal, force) => authenticate(account.credentials(signal, force), signal, request.signal),
+        }, send, authSignal, model, options.transport)
         if (sent instanceof ClaudeFailure) {
+          if (authSignal.aborted) {
+            const failure = { ...(last ?? sent.detail), exhausted: true }
+            options.diagnostics?.record(failure, "stop", session)
+            return failureResponse(failure)
+          }
           const hop = nextAccount(sent.detail)
-          if (hop === "stop" || index === accounts.length - 1) return failureResponse(sent.detail)
+          if (hop === "stop" || index === accounts.length - 1) {
+            options.diagnostics?.record(sent.detail, "stop", session)
+            return failureResponse(sent.detail)
+          }
           if (hop === "cool") cooling.set(account.source, Date.now() + accountCoolMs(sent.detail))
           options.diagnostics?.record(sent.detail, "other_account", session)
           last = sent.detail
@@ -67,6 +83,7 @@ export function gateway(options: {
       // Never send unknown Error.message: a transport can put an authenticated
       // URL or credential blob there. Cancellation cannot trigger recovery.
       if (error instanceof DOMException && error.name === "AbortError") return new Response(null, { status: 499 })
+      if (error instanceof ClaudeFailure) return failureResponse(error.detail)
       // Fetch rejects with the native code when api.anthropic.com is unreachable. Forwarding
       // the code lets the runner wait out the outage like a direct provider connection.
       const code = "code" in error && typeof error.code === "string" ? error.code : undefined
@@ -78,6 +95,17 @@ export function gateway(options: {
     },
   })
   return { url: `http://127.0.0.1:${server.port}/v1`, secret, stop: () => server.stop(true) }
+}
+
+async function authenticate<T>(pending: Promise<T>, signal: AbortSignal, caller: AbortSignal) {
+  const cancelled = Promise.withResolvers<never>()
+  const abort = () => cancelled.reject(caller.aborted ? caller.reason : new ClaudeFailure({
+    category: "refresh_pending", reason: "timeout", exhausted: true,
+  }))
+  signal.addEventListener("abort", abort, { once: true })
+  if (signal.aborted) abort()
+  try { return await Promise.race([pending, cancelled.promise]) }
+  finally { signal.removeEventListener("abort", abort) }
 }
 
 async function attempt(

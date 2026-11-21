@@ -31,7 +31,8 @@ test.each([200, 429, 502])("gzip upstream HTTP %s crosses pinned transforms and 
     },
   })
   cleanup.push(() => { upstream.stop(true) })
-  const proxy = gateway({ auth: new SubscriptionAuth({ store: { read: async () => credentials, write: async () => true } }), transport: modules.transport, upstream: `http://127.0.0.1:${upstream.port}` })
+  const auth = new SubscriptionAuth({ store: { read: async () => credentials, write: async () => true } })
+  const proxy = gateway({ accounts: () => [{ source: "test", credentials: (signal, force) => auth.credentials(signal, force) }], transport: modules.transport, upstream: `http://127.0.0.1:${upstream.port}` })
   cleanup.push(() => { proxy.stop() })
   const response = await fetch(`${proxy.url}/messages`, {
     method: "POST", headers: { "x-subscription-gateway": proxy.secret, connection: "keep-alive, x-client-hop", "x-client-hop": "must-not-cross-hop" },

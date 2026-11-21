@@ -14,7 +14,8 @@ test("an unreachable upstream is reported with its native network code and never
   const upstream = `http://127.0.0.1:${closed.port}`
   closed.stop(true)
   const credentials = { accessToken: "synthetic-access", refreshToken: "synthetic-refresh", expiresAt: Date.now() + 3600000 }
-  const proxy = gateway({ auth: new SubscriptionAuth({ store: { read: async () => credentials, write: async () => true } }), transport: modules.transport, upstream })
+  const auth = new SubscriptionAuth({ store: { read: async () => credentials, write: async () => true } })
+  const proxy = gateway({ accounts: () => [{ source: "test", credentials: (signal, force) => auth.credentials(signal, force) }], transport: modules.transport, upstream })
   cleanup.push(() => { proxy.stop() })
   const response = await fetch(`${proxy.url}/messages`, {
     method: "POST", headers: { "x-subscription-gateway": proxy.secret },

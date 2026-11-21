@@ -39,7 +39,7 @@ describe("claude account rotation", () => {
         { source: "second", credentials: async () => ({ accessToken: "live" }) },
       ],
       transport,
-      upstream: upstream.url,
+      upstream: upstream.url.toString(),
     })
     const first = await fetch(`${proxy.url}/messages`, {
       method: "POST",
@@ -76,7 +76,7 @@ describe("claude account rotation", () => {
         { source: "second", credentials: async () => ({ accessToken: "live" }) },
       ],
       transport,
-      upstream: upstream.url,
+      upstream: upstream.url.toString(),
     })
     const response = await fetch(`${proxy.url}/messages`, {
       method: "POST",
