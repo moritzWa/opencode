@@ -82,12 +82,15 @@ const layer = Layer.effect(
         const selected = (yield* available()).find(
           (model) => model.providerID === session.model?.providerID && model.id === session.model.id,
         )
-        if (!selected)
-          return yield* new ModelUnavailableError({
-            providerID: session.model.providerID,
-            modelID: session.model.id,
-          })
-        return yield* resolver.resolveModel(selected, session.model.variant)
+        if (selected) return yield* resolver.resolveModel(selected, session.model.variant)
+        // The pinned model was removed or disabled after the session chose it. Run on the configured default
+        // instead of failing every turn and compaction; the pinned variant belongs to the missing model.
+        const fallback = yield* resolver.resolve()
+        if (fallback) return fallback
+        return yield* new ModelUnavailableError({
+          providerID: session.model.providerID,
+          modelID: session.model.id,
+        })
       }),
     })
   }),

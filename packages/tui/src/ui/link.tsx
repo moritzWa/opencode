@@ -54,28 +54,9 @@ export function clickedLink(renderer: CliRenderer, event: MouseEvent) {
  */
 export function clickedPath(renderer: CliRenderer, event: MouseEvent, directory: string) {
   if (!isPlainClick(renderer, event) || event.x < 0 || event.y < 0) return
-  const rows = new TextDecoder().decode(renderer.currentRenderBuffer.getRealCharBytes(true)).split("\n")
-  const row = rows[event.y]
-  if (!row) return
-  let column = 0
-  let index = 0
-  for (const char of row) {
-    column += Bun.stringWidth(char)
-    if (column > event.x) break
-    index += char.length
-  }
-  // The buffer does not say which rows are soft-wrapped, so words from the rows around the click are candidates for
-  // continuing a path. Border glyphs from message gutters are not part of any path.
-  const words = rows.flatMap((text, at) =>
-    Math.abs(at - event.y) > 3
-      ? []
-      : [...text.matchAll(/(?:\\.|\S)+/g)]
-          .filter((match) => !/^[\u2500-\u257f]+$/.test(match[0]))
-          .map((match) => ({ row: at, start: match.index, end: match.index + match[0].length, text: match[0] })),
-  )
-  const inside = words.findIndex((word) => word.row === event.y && word.start <= index && index < word.end)
-  const after = words.findIndex((word) => word.row === event.y && word.start > index)
-  const gap = inside < 0 && after > 0 && words[after - 1].row === event.y
+  const screen = screenWords(renderer, event)
+  if (!screen) return
+  const { words, inside, after, gap } = screen
   if (inside < 0 && !gap) return
   const from = inside >= 0 ? inside : after - 1
   const to = inside >= 0 ? inside : after
@@ -98,6 +79,43 @@ export function clickedPath(renderer: CliRenderer, event: MouseEvent, directory:
       return found ? [{ found, length: text.length }] : []
     })
     .toSorted((a, b) => b.length - a.length)[0]?.found
+}
+
+/**
+ * Returns the web address written as plain text under a plain left click: `https://...` or an address without a scheme
+ * such as `www.arca.inc/tools` or `arca.inc/blog/post`, including one that wraps across rows. Scheme-less addresses are
+ * returned as `https://` URLs.
+ */
+export function clickedUrl(renderer: CliRenderer, event: MouseEvent) {
+  if (!isPlainClick(renderer, event) || event.x < 0 || event.y < 0) return
+  const screen = screenWords(renderer, event)
+  if (!screen || screen.inside < 0) return
+  const { words, inside } = screen
+  const width = Math.max(...words.map((word) => word.end))
+  // A soft wrap continues an address when the word ends its row at a break point or the last column, and the next
+  // word is the first on the row below.
+  const wraps = (at: number) => {
+    const word = words[at]
+    const next = words[at + 1]
+    if (!next || next.row !== word.row + 1) return false
+    if (words.some((other) => other.row === word.row && other.start > word.start)) return false
+    if (words.some((other) => other.row === next.row && other.start < next.start)) return false
+    return /[-/]$/.test(word.text) || word.end >= width
+  }
+  for (let at = inside; at >= 0; at--) {
+    if (at < inside && !wraps(at)) return
+    if (!URL_START.test(words[at].text)) continue
+    let end = inside
+    while (wraps(end)) end++
+    const text = words
+      .slice(at, end + 1)
+      .map((word) => word.text)
+      .join("")
+      .replace(/^[`"'(\[<]+/, "")
+      .replace(/[`"')\]>.,;:!?]+$/, "")
+    const href = /^https?:\/\//i.test(text) ? text : `https://${text}`
+    return URL.canParse(href) && new URL(href).hostname.includes(".") ? href : undefined
+  }
 }
 
 export function openLink(target: string, directory: string) {
@@ -142,6 +160,35 @@ const OPENS_AS_PROGRAM = new Set([
   "prefpane",
   "saver",
 ])
+
+const URL_START =
+  /^[`"'(\[<]*(?:https?:\/\/|www\.|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|inc|ai|dev|app|co|edu|gov|me|so|xyz|sh)\/)/i
+
+// The buffer does not say which rows are soft-wrapped, so words from the rows around the click are candidates for
+// continuing a link. Border glyphs from message gutters are not part of any link.
+function screenWords(renderer: CliRenderer, event: MouseEvent) {
+  const rows = new TextDecoder().decode(renderer.currentRenderBuffer.getRealCharBytes(true)).split("\n")
+  const row = rows[event.y]
+  if (!row) return
+  let column = 0
+  let index = 0
+  for (const char of row) {
+    column += Bun.stringWidth(char)
+    if (column > event.x) break
+    index += char.length
+  }
+  const words = rows.flatMap((text, at) =>
+    Math.abs(at - event.y) > 3
+      ? []
+      : [...text.matchAll(/(?:\\.|\S)+/g)]
+          .filter((match) => !/^[\u2500-\u257f]+$/.test(match[0]))
+          .map((match) => ({ row: at, start: match.index, end: match.index + match[0].length, text: match[0] })),
+  )
+  const inside = words.findIndex((word) => word.row === event.y && word.start <= index && index < word.end)
+  const after = words.findIndex((word) => word.row === event.y && word.start > index)
+  const gap = inside < 0 && after > 0 && words[after - 1].row === event.y
+  return { words, inside, after, gap }
+}
 
 function isPlainClick(renderer: CliRenderer, event: MouseEvent) {
   if (!event.isDragging || event.modifiers.ctrl || event.modifiers.alt || event.modifiers.shift) return false
