@@ -27,6 +27,7 @@ import { SessionStore } from "@opencode/core/session/store"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { DateTime, Deferred, Effect, Fiber, Schema } from "effect"
 import { testEffect } from "./lib/effect"
+import { withEnv } from "./fixture/env"
 
 const it = testEffect(
   AppNodeBuilder.build(
@@ -247,6 +248,21 @@ const setup = Effect.fnUntraced(function* (options: { endpoint?: boolean } = {})
     model,
     compaction,
   }
+})
+
+Array.of(false, true).forEach((endpoint) => {
+  it.live(`the watchdog settles a silent native ${endpoint ? "endpoint" : "trigger"} compaction`, () =>
+    withEnv({ OPENCODE_STREAM_IDLE_TIMEOUT_MS: "1000" }, () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup({ endpoint })
+        yield* fixture.prompt("Keep this work if the provider stops responding")
+        fixture.state.hang = true
+        expect(yield* fixture.overflow).toMatchObject({ status: "failed", error: { type: "provider.timeout" } })
+        const messages = yield* fixture.store.context(fixture.sessionID)
+        expect(messages.findLast((message) => message.type === "compaction")).toMatchObject({ status: "failed" })
+      }),
+    ),
+  )
 })
 
 it.live(

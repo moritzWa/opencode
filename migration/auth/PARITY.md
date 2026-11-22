@@ -31,6 +31,7 @@ Options:
 | `accountSource` | Existing persisted account source, then first discovered account | Default Claude Keychain/file source |
 | `legacyRoot` | Resolved pinned dependency | Explicit portable dependency location |
 | `diagnostics` | `~/.local/share/opencode-v2/claude-subscription/diagnostics.sqlite` | Secret-free bounded diagnostics database |
+| `codexFallback` | `false` | Allow OpenAI subscription recovery after Claude cannot authenticate or serve the request |
 
 The V2 Anthropic integration gains an external "Claude Code subscription
 (Keychain)" method with an account selector. It stores only the source name in
@@ -51,12 +52,13 @@ gateway, which installs the actual subscription bearer token and removes API key
 - Existing work billing whitelist: the first directory component under
   `~/Code` must be `arca`/`science-website` or start with the repo name plus `-`.
   Missing/unreadable directory is personal. `arcafoo` is personal.
-- On explicit model-quota/capacity evidence, work Claude first tries the matching
-  Cursor 1M model, then the unmodified model, then legacy work candidates.
-  Personal requests use the existing OpenAI subscription candidate order, led by
-  `openai/gpt-6.1-sol`. Personal requests can never select Cursor.
-- Auth outages use exactly `openai/gpt-6.1-sol`, for both personal and work requests:
-  this is a personal subscription route and does not add work billing exposure.
+- Recovery uses only Claude and OpenAI subscription candidates. Cursor and Grok
+  are never recovery rungs. If all allowed candidates are unavailable, the Session
+  stops with its classified error instead of selecting an unrelated provider.
+- A brief refresh failure retries Claude and tries the other account. Once its
+  authentication budget is exhausted, a refresh throttle/5xx/lock timeout may
+  move to Codex. Network failures still use the bounded provider-reachability
+  policy. A provider already at its usage limit is not selected.
 - Auxiliary title/compaction/generate requests do not initiate primary recovery.
   Child Sessions are not detached and revived by the plugin.
 - Default model selection remains the configuration owner's decision.
@@ -67,10 +69,17 @@ gateway, which installs the actual subscription bearer token and removes API key
   malformed refresh responses, store failures, and another refresher holding the
   lock have distinct structured categories. No network/5xx failure is fabricated
   into a quota or a generic 429.
-- Transient refresh work has a 75-second deadline, at most eight exchanges, a
+- Transient refresh work has a 25-second per-account deadline, at most eight exchanges, a
   per-exchange 15-second timeout bounded by the remaining deadline, and an
-  abort-aware backoff. Retry-After is respected within the deadline. Expired
-  requests cannot be kept alive indefinitely by generic model retries.
+  abort-aware backoff. Retry-After is respected without sleeping beyond the
+  budget. The gateway caps all authentication work and account hops at 60 seconds,
+  below Core's 90-second headers deadline. Exhaustion remains a structured error.
+- Locations lease one shared refresh coordinator per account. Cancelling one
+  caller does not cancel another; exhausted refreshes share a Retry-After cooldown.
+  Fresh credentials written by another process bypass that cooldown.
+- Compaction uses the semantic watchdog across requests and retries, including
+  native compaction. Provider events refresh its clock; transport errors do not.
+  Retrying compaction emits a visible notice with model, attempt, delay and error.
 - The refresh endpoint's status, reason code, and Retry-After milliseconds remain
   in the structured provider error. Network failures have no upstream status.
   A local 503 represents gateway unavailability, not an invented upstream 429.
@@ -259,3 +268,32 @@ answers 503 `upstream_network` with the native code in `error.code`. Core
 a network outage. The category never triggers fallback: switching to Sol while
 offline would fail the same way and leave the Session on another model.
 `test/network.test.ts` covers the gateway side.
+
+## A dead connection leaves after a few tries
+
+`refresh_network` and `upstream_network` still retry, so one
+dropped socket does not change the model. At runner attempt 4 (`NETWORK_GIVE_UP`)
+the retry hook stops and recovery can move to the other subscription. Exhausted
+authentication failures stop generic retries immediately and may select Sol.
+A single failure still does not (`persistent` is set only after that attempt).
+
+## Last resort and return home
+
+`xai/grok-4.7` is forbidden as a fallback, even if it appears in the available
+catalog. Its constant is retained only to recognize historical selections.
+
+A `prompt` hook returns a session on that model to `anthropic/claude-sonnet-5-5`
+when its next prompt arrives, if Claude is not held or cooling, the session is not
+running, and Sonnet is available. If the history is over 300k tokens
+(`COMPACT_ABOVE`, measured from the last answered request) a manual compaction is
+queued first, so Sonnet reads the summary instead of the full history cold.
+Compaction uses the configured `compaction` agent's model, including project overrides.
+
+The return writes `metadata.modelReturn` (`at`, `from`, `tokens`, `compacted`). A bare
+switch to Grok after that timestamp is a deliberate pick and stays; a switch
+committed with a recovery marker (the fallback) does not. Any failure in the hook
+is logged as `[model-return]` and leaves the session where it is.
+
+Options for tests: `upstream` (Anthropic base URL) and `compactAbove` (token
+threshold). `test/return.e2e.test.ts` runs the real server against local stand-ins
+and needs `RETURN_E2E_CLI` pointing at a V2 executable.

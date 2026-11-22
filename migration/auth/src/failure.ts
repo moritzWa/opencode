@@ -8,6 +8,7 @@ export interface Failure {
   exhausted?: boolean
   quotaWindow?: "5h" | "7d" | "7d_opus"
   code?: string
+  resetsAt?: number
 }
 
 export class ClaudeFailure extends Error {
@@ -45,10 +46,19 @@ export async function classify(response: Response, phase: "refresh" | "model"): 
   return { category, status: response.status, reason: billing ? "insufficient_credits" : reason, ...(wait === undefined ? {} : { retryAfterMs: wait }), ...(quotaWindow ? { quotaWindow } : {}) }
 }
 
+function networkCode(detail: Failure) {
+  if (detail.code) return detail.code
+  if (detail.category !== "refresh_network" && detail.category !== "upstream_network") return
+  return detail.reason === "timeout" ? "ETIMEDOUT" : "ECONNRESET"
+}
+
 export function failureResponse(detail: Failure) {
   // Network failures have no upstream HTTP status. 503 describes this local gateway,
   // while the structured evidence deliberately leaves upstream status absent.
-  return Response.json({ type: "error", error: { type: `subscription.${detail.category}`, ...(detail.code ? { code: detail.code } : {}), message: `Claude subscription ${detail.category}: ${detail.reason}` }, subscription: detail }, { status: detail.status && detail.status >= 400 ? detail.status : 503 })
+  // The socket code lets the runner wait the outage out instead of treating it as
+  // a dead subscription.
+  const code = networkCode(detail)
+  return Response.json({ type: "error", error: { type: `subscription.${detail.category}`, ...(code ? { code } : {}), message: `Claude subscription ${detail.category}: ${detail.reason}` }, subscription: detail }, { status: detail.status && detail.status >= 400 ? detail.status : 503 })
 }
 
 export function readFailure(error: { type?: string; message?: string; response?: { body: string } }): Failure | undefined {
@@ -58,7 +68,11 @@ export function readFailure(error: { type?: string; message?: string; response?:
     // ordinary invalid requests (context length, tools, etc.) must not switch models.
     const upstream = parsed && typeof parsed === "object" && "error" in parsed ? parsed.error : undefined
     if (upstream && typeof upstream === "object" && "type" in upstream && upstream.type === "invalid_request_error" && "message" in upstream && typeof upstream.message === "string" && upstream.message.includes("Your credit balance is too low to access the Anthropic API")) return { category: "billing", status: 400, reason: "insufficient_credits" }
-    if (error.type === "provider.quota") return { category: "model_quota", reason: "quota_exceeded" }
+    if (error.type === "provider.quota") {
+      const raw = upstream && typeof upstream === "object" && "resets_at" in upstream ? upstream.resets_at : undefined
+      const resetsAt = typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? (raw > 1e12 ? raw : raw * 1000) : undefined
+      return { category: "model_quota", reason: "usage_limit_reached", exhausted: true, ...(resetsAt ? { resetsAt } : {}) }
+    }
     if (error.type === "provider.auth") return { category: "refresh_revoked", reason: "authentication_error", exhausted: true }
     if (/\bcapacity_limit\b/.test(error.message ?? "")) return { category: "capacity", reason: "capacity_limit" }
     return
