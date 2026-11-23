@@ -5,7 +5,7 @@ import { Session } from "@opencode/schema/session"
 import { Config } from "@opencode/core/config"
 import { Global } from "@opencode/util/global"
 import { AbsolutePath } from "@opencode/schema/schema"
-import { Effect, Schema } from "effect"
+import { Effect, Schema, Schedule } from "effect"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { ServerFetch } from "../src/fetch"
@@ -43,20 +43,26 @@ for (const hint of ["header", "query"] as const) {
       const get = (endpoint: string, directory?: string) => {
         const url = new URL(
           endpoint === "/instructions"
-            ? `http://opencode.local/api/experimental/session/${session.id}/instructions/entries`
+            ? `http://opencode.local/api/session/${session.id}/revert`
             : `http://opencode.local/api/session/${session.id}${endpoint}`,
         )
         if (directory && hint === "query") url.searchParams.set("location[directory]", directory)
         return Effect.promise(() =>
           handler(
             new Request(url, {
+              // Instruction entries are global now. Clearing an absent revert exercises Location routing without model work.
+              method: endpoint === "/instructions" ? "DELETE" : "GET",
               headers: directory && hint === "header" ? { "x-opencode-directory": encodeURIComponent(directory) } : {},
             }),
           ),
+        ).pipe(
+          // Placement recovery starts an advisory drain; retry a transient busy response on the client.
+          Effect.repeat({ while: (response) => response.status === 409, schedule: Schedule.spaced("20 millis") }),
+          Effect.timeout("3 seconds"),
         )
       }
       // A valid original placement must win over an unrelated requested directory.
-      expect((yield* get("/instructions", destination)).status).toBe(200)
+      expect((yield* get("/instructions", destination)).status).toBe(204)
       const before = yield* get("")
       expect(decode(yield* Effect.promise(() => before.json())).data.location.directory).toBe(source)
       yield* Effect.promise(() => fs.rm(source, { recursive: true }))
@@ -66,13 +72,13 @@ for (const hint of ["header", "query"] as const) {
       yield* get("/instructions", path.join(root.path, "also-missing"))
       const unchanged = yield* get("")
       expect(decode(yield* Effect.promise(() => unchanged.json())).data.location.directory).toBe(source)
-      expect((yield* get("/instructions", destination)).status).toBe(200)
+      expect((yield* get("/instructions", destination)).status).toBe(204)
       const after = yield* get("")
       const recovered = decode(yield* Effect.promise(() => after.json())).data
       expect(recovered.location.directory).toBe(destination)
       expect(recovered.title).toBe("Recover me")
       // Subsequent routing needs no fallback hint: the move changed durable placement.
-      expect((yield* get("/instructions")).status).toBe(200)
+      expect((yield* get("/instructions")).status).toBe(204)
     }),
   )
 }

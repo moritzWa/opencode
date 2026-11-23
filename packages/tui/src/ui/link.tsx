@@ -178,7 +178,7 @@ function screenWords(renderer: CliRenderer, event: MouseEvent) {
     index += char.length
   }
   const words = rows.flatMap((text, at) =>
-    Math.abs(at - event.y) > 3
+    Math.abs(at - event.y) > 7
       ? []
       : [...text.matchAll(/(?:\\.|\S)+/g)]
           .filter((match) => !/^[\u2500-\u257f]+$/.test(match[0]))

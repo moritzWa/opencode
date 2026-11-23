@@ -49,6 +49,12 @@ Markdown/search/selection tests, and the packed subscription-auth loader have
 passed during integration. The broad package runs still require final acceptance;
 intermediate results are not a claim that the integration is ready to install.
 
+Latest full Core run: 8,038 passed, 27 skipped, zero failures. Protocol: 17 passed.
+The full Server run passed 174 tests with two stale Location-routing expectations;
+both pass after moving the test off the now-global instruction-entry endpoint.
+The full TUI run passed 1,794 tests with one wrapped-path fixture failure under
+the longer isolated home path. Final reruns remain required.
+
 **Installation gate:** the installed read-aloud highlighter uses the removed
 Markdown `_blockStates` and text-buffer internals. It needs an adapter and muted,
 isolated acceptance before replacing the daily build. Do not silently disable
