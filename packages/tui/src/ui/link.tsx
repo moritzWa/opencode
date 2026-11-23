@@ -44,7 +44,7 @@ export function Link(props: LinkProps) {
  * link resolves the whole link. Modified clicks are left to the terminal's own hyperlink handling.
  */
 export function clickedLink(renderer: CliRenderer, event: MouseEvent) {
-  if (!isPlainClick(renderer, event)) return
+  if (!plainClick(renderer, event)) return
   return renderer.getLinkAt(event.x, event.y) ?? undefined
 }
 
@@ -53,7 +53,7 @@ export function clickedLink(renderer: CliRenderer, event: MouseEvent) {
  * `~/Desktop/report.xlsx` or `/Users/me/My\ Files/a.png`. Text that does not name something on disk is not a link.
  */
 export function clickedPath(renderer: CliRenderer, event: MouseEvent, directory: string) {
-  if (!isPlainClick(renderer, event) || event.x < 0 || event.y < 0) return
+  if (!plainClick(renderer, event) || event.x < 0 || event.y < 0) return
   const screen = screenWords(renderer, event)
   if (!screen) return
   const { words, inside, after, gap } = screen
@@ -87,7 +87,7 @@ export function clickedPath(renderer: CliRenderer, event: MouseEvent, directory:
  * returned as `https://` URLs.
  */
 export function clickedUrl(renderer: CliRenderer, event: MouseEvent) {
-  if (!isPlainClick(renderer, event) || event.x < 0 || event.y < 0) return
+  if (!plainClick(renderer, event) || event.x < 0 || event.y < 0) return
   const screen = screenWords(renderer, event)
   if (!screen || screen.inside < 0) return
   const { words, inside } = screen
@@ -190,7 +190,7 @@ function screenWords(renderer: CliRenderer, event: MouseEvent) {
   return { words, inside, after, gap }
 }
 
-function isPlainClick(renderer: CliRenderer, event: MouseEvent) {
+export function plainClick(renderer: CliRenderer, event: MouseEvent) {
   if (!event.isDragging || event.modifiers.ctrl || event.modifiers.alt || event.modifiers.shift) return false
   const selection = renderer.getSelection()
   return !!selection?.isStart && selection.behavior === "cell"

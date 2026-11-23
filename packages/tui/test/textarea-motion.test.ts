@@ -1,4 +1,4 @@
-import { EditBuffer, TextareaRenderable } from "@opentui/core"
+import { EditBuffer, TextareaRenderable, ResourceContext } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { expect, test } from "bun:test"
 import { installTextareaMotion } from "../src/util/textarea-motion"
@@ -6,7 +6,8 @@ import { installTextareaMotion } from "../src/util/textarea-motion"
 installTextareaMotion()
 
 function boundary(text: string, row: number, col: number, direction: "next" | "prev") {
-  const buffer = EditBuffer.create("wcwidth")
+  const context = new ResourceContext({ objectCapacity: 8, renderCellsMax: 1 })
+  const buffer = EditBuffer.create("wcwidth", context)
   try {
     buffer.setText(text)
     buffer.setCursorToLineCol(row, col)
@@ -14,6 +15,7 @@ function boundary(text: string, row: number, col: number, direction: "next" | "p
     return [result.row, result.col]
   } finally {
     buffer.destroy()
+    context.destroy()
   }
 }
 

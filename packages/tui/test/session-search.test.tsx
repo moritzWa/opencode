@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test"
 import { CodeRenderable, RGBA, SyntaxStyle } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
-import { findMatches, searchable, highlightMatches, clearHighlights, matchRow } from "../src/routes/session/search"
+import { findMatches, searchable, paintSearchMatches, matchRow } from "../src/routes/session/search"
 
 test("literal smart-case search highlights separate occurrences and wrapped unicode columns", async () => {
-  const setup = await createTestRenderer({ width: 18, height: 12, useThread: false })
-  const syntax = SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } })
+  const setup = await createTestRenderer({ width: 18, height: 12 })
+  const syntax = SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } }, setup.renderer.nativeScene)
   const node = new CodeRenderable(setup.renderer, {
     content: "界😀 find find\nFind [literal] find",
     filetype: "text",
@@ -25,15 +25,31 @@ test("literal smart-case search highlights separate occurrences and wrapped unic
     expect(findMatches(setup.renderer.root, "Find", setup.renderer.widthMethod)).toHaveLength(1)
     expect(findMatches(setup.renderer.root, "[literal]", setup.renderer.widthMethod)).toHaveLength(1)
     expect(matchRow(matches[3])).toBeGreaterThan(matchRow(matches[0]))
-    const color = RGBA.fromHex("#ffffff")
-    highlightMatches(matches, 1, { match: { fg: color, bg: color }, current: { fg: color, bg: color } })
-    const firstLine = matches[0].target.buffer.getLineHighlights(0)
-    expect(firstLine.filter((item) => item.hlRef === 0x5e01)).toHaveLength(2)
-    expect(firstLine.filter((item) => item.hlRef === 0x5e02)).toHaveLength(1)
-    clearHighlights(matches)
+    const foreground = RGBA.fromHex("#ffffff")
+    const background = RGBA.fromHex("#654321")
+    const selected = RGBA.fromHex("#123456")
+    const paint = (buffer: Parameters<typeof paintSearchMatches>[0]) =>
+      paintSearchMatches(
+        buffer,
+        matches,
+        1,
+        { match: { fg: foreground, bg: background }, current: { fg: foreground, bg: selected } },
+        { x: 0, y: 0, width: 18, height: 12 },
+        setup.renderer.widthMethod,
+      )
+    setup.renderer.addPostProcessFn(paint)
+    await setup.renderOnce()
+    const spans = setup.captureSpans().lines.flatMap((line) => line.spans)
+    expect(spans.some((span) => span.text.includes("find") && span.bg.equals(background))).toBe(true)
+    expect(spans.some((span) => span.text.includes("find") && span.bg.equals(selected))).toBe(true)
+    setup.renderer.removePostProcessFn(paint)
+    await setup.renderOnce()
     expect(
-      matches[0].target.buffer.getLineHighlights(0).filter((item) => item.hlRef === 0x5e01 || item.hlRef === 0x5e02),
-    ).toHaveLength(0)
+      setup
+        .captureSpans()
+        .lines.flatMap((line) => line.spans)
+        .some((span) => span.bg.equals(background)),
+    ).toBe(false)
   } finally {
     setup.renderer.destroy()
     syntax.destroy()

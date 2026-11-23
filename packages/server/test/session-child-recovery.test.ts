@@ -164,6 +164,14 @@ function scenario(interrupt?: "parent" | "child") {
         ),
         SessionRunnerModel.node.replace(
           Layer.succeed(SessionRunnerModel.Service, {
+            select: (session) =>
+              Effect.succeed({
+                info: Model.Info.default(
+                  session.model?.providerID ?? Provider.ID.make("openai"),
+                  session.model?.id ?? Model.ID.make("parent-control"),
+                ),
+                variant: undefined,
+              }),
             resolve: (session) =>
               Effect.succeed(
                 SessionRunnerModel.resolved(
@@ -199,9 +207,7 @@ function scenario(interrupt?: "parent" | "child") {
     if (interrupt) {
       expect(yield* execution.isActive(parent.id)).toBe(true)
       expect(yield* execution.isActive(childID)).toBe(true)
-      expect(yield* execution.interrupt(interrupt === "parent" ? parent.id : childID, { awaitSettlement: true })).toBe(
-        true,
-      )
+      expect(yield* execution.interrupt(interrupt === "parent" ? parent.id : childID)).toBe(true)
       // Release only after production interruption has settled. Policy cannot revive the child.
       release.resolve()
       yield* Effect.promise(() => policyFinished.promise)

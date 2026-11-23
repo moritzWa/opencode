@@ -38,7 +38,6 @@ function Harness() {
           syntaxStyle={themes.currentSyntax()}
           content={"The agent said **upstream** is ready.\n\nSecond paragraph."}
           streaming={false}
-          internalBlockMode="top-level"
         />
       </scrollbox>
       <SessionSearchBar search={search} />

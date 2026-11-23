@@ -104,29 +104,24 @@ describe("legacy MCP credential migration", () => {
         yield* native(
           db,
           Effect.gen(function* () {
+            const credentials = yield* Credential.Service
+            const credential = (yield* credentials.list(Integration.ID.make(McpIdentity.id("slack", url)))).at(-1)
             const provider = yield* McpOAuth.connectProvider({
               config: { type: "remote", url },
-              integrationID: Integration.ID.make(McpIdentity.id("slack", url)),
+              server: "slack",
+              credential,
             })
-            const tokens = yield* Effect.promise(async () => provider.tokens())
-            expect(tokens).toMatchObject({
-              access_token: "legacy-access",
-              refresh_token: "legacy-refresh",
-              token_type: "Bearer",
-              scope: entry.tokens.scope,
-            })
-            expect(tokens?.expires_in).toBeGreaterThan(3500)
-            expect(tokens?.expires_in).toBeLessThanOrEqual(3601)
-            expect(yield* Effect.promise(async () => provider.clientInformation())).toEqual({
+            expect(yield* Effect.promise(() => provider.token())).toBe("legacy-access")
+            if (credential?.value.type !== "oauth") return expect.unreachable()
+            expect(credential.value.expires).toBe(Math.floor(expiresAt * 1000))
+            expect(McpOAuth.clientFromCredential(credential.value)).toEqual({
               client_id: "legacy-client",
               client_secret: "legacy-client-secret",
               client_id_issued_at: 1700000000,
               client_secret_expires_at: 0,
             })
-            expect(provider.state).toBeUndefined()
-            yield* Effect.promise(async () => {
-              await expect(provider.codeVerifier()).rejects.toThrow("Missing PKCE code verifier")
-            })
+            expect(credential.value.metadata).not.toHaveProperty("state")
+            expect(credential.value.metadata).not.toHaveProperty("codeVerifier")
           }),
         )
         const before = yield* db.all(sql`SELECT * FROM credential`)
@@ -167,17 +162,20 @@ describe("legacy MCP credential migration", () => {
               ["slack-other-account", url, "other-account"],
               ["slack-other-url", url + "/", "other-url"],
             ] as const) {
+              const credentials = yield* Credential.Service
+              const credential = (yield* credentials.list(Integration.ID.make(McpIdentity.id(name, serverUrl)))).at(-1)
               const provider = yield* McpOAuth.connectProvider({
                 config: { type: "remote", url: serverUrl },
-                integrationID: Integration.ID.make(McpIdentity.id(name, serverUrl)),
+                server: name,
+                credential,
               })
-              const tokens = yield* Effect.promise(async () => provider.tokens())
-              expect(tokens?.access_token).toBe(access)
+              expect(yield* Effect.promise(() => provider.token())).toBe(access)
+              if (credential?.value.type !== "oauth") return expect.unreachable()
               if (name === "slack-other-url") {
-                expect(tokens?.expires_in).toBe(0)
+                expect(credential.value.expires).toBeLessThan(Date.now())
                 continue
               }
-              expect(tokens).not.toHaveProperty("expires_in")
+              expect(credential.value.expires).toBe(0)
             }
           }),
         )

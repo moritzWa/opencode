@@ -24,6 +24,8 @@ export type TuiTerminalEnvironment = Readonly<{
   platform: string
   clientID?: string
   variables?: Readonly<Record<string, string>>
+  // The server runs on this machine, so it can read file paths from this terminal.
+  localServer?: boolean
 }>
 
 export type TuiStartup = Readonly<{

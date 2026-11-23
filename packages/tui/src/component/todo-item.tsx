@@ -1,24 +1,26 @@
-import { Option, Schema } from "effect"
-import { useTheme } from "../context/theme"
+import { TextAttributes } from "@opentui/core"
+import type { ResolvedTheme } from "@opencode/theme/tui"
+import { todoMarker, type Todo } from "../util/todo"
 
-const decode = Schema.decodeUnknownOption(
-  Schema.Array(Schema.Struct({ content: Schema.String, status: Schema.String })),
-)
+export function TodoItem(props: { theme: ResolvedTheme; todo: Todo }) {
+  const fg = () => {
+    if (props.todo.status === "in_progress") return props.theme.text.feedback.warning.base
+    if (props.todo.status === "cancelled") return props.theme.text.faint
+    return props.theme.text.muted
+  }
 
-export function parseTodos(value: unknown) {
-  return Option.getOrElse(decode(value), () => [])
-}
-
-export function TodoItem(props: { content: string; status: string }) {
-  const theme = useTheme()
-  const color = () => (props.status === "in_progress" ? theme.text.feedback.warning.base : theme.text.muted)
   return (
-    <box flexDirection="row">
-      <text flexShrink={0} fg={color()}>
-        [{props.status === "completed" ? "✓" : props.status === "in_progress" ? "•" : " "}]{" "}
+    <box flexDirection="row" gap={0}>
+      <text flexShrink={0} fg={fg()}>
+        {todoMarker(props.todo.status)}{" "}
       </text>
-      <text flexGrow={1} wrapMode="word" fg={color()}>
-        {props.content}
+      <text
+        flexGrow={1}
+        wrapMode="word"
+        fg={fg()}
+        attributes={props.todo.status === "cancelled" ? TextAttributes.STRIKETHROUGH : undefined}
+      >
+        {props.todo.content}
       </text>
     </box>
   )

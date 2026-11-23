@@ -1,15 +1,16 @@
 export * as LocationActivity from "./location-activity.js"
 
 import { Clock, Context, Duration, Effect, Layer, Option, RcMap, Schema } from "effect"
+import type { Document } from "@opencode/schema/config"
 import { Bus } from "./bus.js"
+import { Config } from "./config.js"
+import { Job } from "./job.js"
 import { Location } from "./location.js"
+import { LocationLifecycle } from "./location-lifecycle.js"
 import { LocationServiceMap } from "./location-service-map.js"
 import { SessionEvent } from "./session/event.js"
 import { SessionExecution } from "./session/execution.js"
 import { SessionStore } from "./session/store.js"
-import { Job } from "./job.js"
-import { Pty } from "./pty.js"
-import { Shell } from "./shell.js"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
 
 const isSessionEvent = Schema.is(SessionEvent.Durable)
@@ -24,20 +25,51 @@ export function layer(options: { readonly timeToLive?: Duration.Input; readonly 
       const bus = yield* Bus.Service
       const locations = yield* LocationServiceMap.Service
       const execution = yield* SessionExecution.Service
-      const sessions = yield* SessionStore.Service
       const jobs = yield* Job.Service
-      const timeToLive = Duration.toMillis(options.timeToLive ?? "60 minutes")
-      const entries = new Map<string, { readonly ref: Location.Ref; expiresAt: number }>()
+      const sessions = yield* SessionStore.Service
+      const timeToLive = Duration.fromInputUnsafe(options.timeToLive ?? "60 minutes")
+      const entries = new Map<string, { readonly ref: Location.Ref; touchedAt: number }>()
       const key = (ref: Location.Ref) => `${LocationServiceMap.canonical(ref).directory}\0${ref.workspaceID ?? ""}`
       const touch = (ref: Location.Ref) =>
         Effect.sync(() => {
-          entries.set(key(ref), { ref, expiresAt: clock.currentTimeMillisUnsafe() + timeToLive })
+          entries.set(key(ref), { ref, touchedAt: clock.currentTimeMillisUnsafe() })
         })
 
+      // Read per location so project config can override the global value.
+      const idleTimeout = (ref: Location.Ref) =>
+        Effect.gen(function* () {
+          const context = yield* locations.contextEffectOption(ref)
+          if (Option.isNone(context)) return timeToLive
+          const entries = yield* Context.get(context.value, Config.Service).entries()
+          const configured = entries.findLast(
+            (entry): entry is Document =>
+              entry.type === "document" && entry.info.experimental?.location_idle_timeout !== undefined,
+          )
+          return configured?.info.experimental?.location_idle_timeout ?? timeToLive
+        }).pipe(
+          Effect.scoped,
+          Effect.orElseSucceed(() => timeToLive),
+        )
+
+      // An open terminal or client MCP socket keeps its Location loaded: eviction would end the shell under the user,
+      // and the client would reconnect and boot a fresh Location right away.
+      const retained = (ref: Location.Ref) =>
+        locations
+          .contextEffectOption(ref)
+          .pipe(
+            Effect.map(
+              Option.exists((context) =>
+                Option.exists(Context.getOption(context, LocationLifecycle.Service), (lifecycle) =>
+                  lifecycle.isRetained(),
+                ),
+              ),
+            ),
+            Effect.scoped,
+          )
+
       const unsubscribe = yield* bus.listen((event) => {
-        if (!isSessionEvent(event)) return Effect.void
-        const location = event.location
-        if (!location) return Effect.void
+        if (!isSessionEvent(event) || !event.location) return Effect.void
+        const location = LocationServiceMap.canonical(event.location)
         return RcMap.has(locations.rcMap, location).pipe(
           Effect.flatMap((active) => (active ? touch(location) : Effect.void)),
         )
@@ -52,51 +84,37 @@ export function layer(options: { readonly timeToLive?: Duration.Input; readonly 
           if (!cached.has(id)) entries.delete(id)
         }
         const now = clock.currentTimeMillisUnsafe()
-        const expired = Array.from(entries.values()).filter((entry) => entry.expiresAt <= now)
+        const expired = yield* Effect.filter(Array.from(entries.values()), (entry) =>
+          idleTimeout(entry.ref).pipe(
+            Effect.map((timeout) => timeout !== false && entry.touchedAt + Duration.toMillis(timeout) <= now),
+          ),
+        )
         if (expired.length === 0) return
-        const active = yield* Effect.forEach(yield* execution.active, (sessionID) => sessions.get(sessionID))
-        const background = yield* Effect.forEach(
-          (yield* jobs.pendingBackground).filter((job) => job.status === "running"),
-          (job) => sessions.get(job.recovery.kind === "shell" ? job.recovery.sessionID : job.recovery.childSessionID),
+        // Waiting on a question, a long tool call, or a background job emits no durable activity.
+        const owners = [
+          ...(yield* execution.active),
+          ...(yield* jobs.runningBackground).flatMap((recovery) =>
+            recovery.kind === "subagent" ? [recovery.childSessionID, recovery.parentSessionID] : [recovery.sessionID],
+          ),
+        ]
+        const occupied = new Set(
+          (yield* Effect.forEach(owners, (sessionID) => sessions.get(sessionID))).flatMap((session) =>
+            session ? [key(session.location)] : [],
+          ),
         )
         yield* Effect.forEach(
           expired,
           (entry) =>
             Effect.gen(function* () {
-              const owners = active.flatMap((session) =>
-                session && key(session.location) === key(entry.ref) ? [session] : [],
-              )
-              // Silence is not idleness: providers, tools, and human input can all
-              // remain active without publishing durable Session events.
-              if (owners.length > 0) return yield* touch(entry.ref)
-              if (background.some((session) => session && key(session.location) === key(entry.ref)))
-                return yield* touch(entry.ref)
-              const busy = yield* Effect.scoped(
-                Effect.gen(function* () {
-                  const context = yield* locations.contextEffectOption(entry.ref)
-                  if (Option.isNone(context)) return false
-                  const shell = Context.getOption(context.value, Shell.Service)
-                  const pty = Context.getOption(context.value, Pty.Service)
-                  if (Option.isSome(shell) && (yield* shell.value.list()).length > 0) return true
-                  return (
-                    Option.isSome(pty) && (yield* pty.value.list()).some((terminal) => terminal.status === "running")
-                  )
-                }),
-              ).pipe(Effect.orElseSucceed(() => true))
-              if (busy) return yield* touch(entry.ref)
-              const remaining = yield* Effect.forEach(yield* execution.active, (sessionID) => sessions.get(sessionID))
-              // Work admitted while checking process activity retains the graph too.
-              if (remaining.some((session) => session && key(session.location) === key(entry.ref))) {
-                yield* touch(entry.ref)
-                return
-              }
+              if (occupied.has(key(entry.ref)) || (yield* retained(entry.ref))) return yield* touch(entry.ref)
               entries.delete(key(entry.ref))
               yield* Effect.logInfo("location services evicted", {
                 directory: entry.ref.directory,
                 workspaceID: entry.ref.workspaceID,
-              }).pipe(Effect.andThen(locations.invalidate(entry.ref)))
+              })
+              yield* locations.invalidate(entry.ref)
             }),
-          { discard: true, concurrency: "unbounded" },
+          { discard: true },
         )
       }).pipe(Effect.forever, Effect.forkScoped)
 
@@ -108,5 +126,5 @@ export function layer(options: { readonly timeToLive?: Duration.Input; readonly 
 export const node = makeGlobalNode({
   service: Service,
   layer: layer(),
-  deps: [Bus.node, LocationServiceMap.node, SessionExecution.node, SessionStore.node, Job.node],
+  deps: [Bus.node, Job.node, LocationServiceMap.node, SessionExecution.node, SessionStore.node],
 })

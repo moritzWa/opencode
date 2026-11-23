@@ -11,7 +11,7 @@
   },
   "scripts": {
     "test": "bun test test",
-    "typecheck": "bun run ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
+    "typecheck": "bun check --no-script -p tsconfig.json"
   },
   "dependencies": {
     "opencode-claude-auth": "2.2.1"
@@ -24,5 +24,10 @@
       "optional": true
     }
   },
-  "files": ["server.ts", "src", "PARITY.md", "THIRD-PARTY.md"]
+  "files": [
+    "server.ts",
+    "src",
+    "PARITY.md",
+    "THIRD-PARTY.md"
+  ]
 }

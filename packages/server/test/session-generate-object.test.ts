@@ -110,6 +110,8 @@ it.live("generates validated objects over HTTP using fork context and only the f
         Watcher.node.replace(Watcher.configured({ enabled: false })),
         SessionRunnerModel.node.replace(
           Layer.succeed(SessionRunnerModel.Service, {
+            select: () =>
+              Effect.succeed({ info: Model.Info.default(model.ref.providerID, model.ref.id), variant: undefined }),
             resolve: (session) => {
               expect(session.model).toMatchObject(model.ref)
               return Effect.succeed(model)
@@ -148,7 +150,7 @@ it.live("generates validated objects over HTTP using fork context and only the f
       const agents = yield* Agent.Service
       const hooks = yield* PluginHooks.Service
       const tools = yield* Tool.Service
-      const entries = yield* InstructionEntry.Service
+      const entries = Context.get(context, InstructionEntry.Service)
       yield* agents.transform((editor) => {
         editor.update(Agent.ID.make("build"), (agent) => {
           agent.system = "Parent system must not leak"

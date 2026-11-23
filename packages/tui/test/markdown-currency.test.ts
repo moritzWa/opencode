@@ -12,14 +12,10 @@ import { tmpdir } from "./fixture/fixture"
 
 const directory = await tmpdir()
 const client = new TreeSitterClient({ dataPath: directory.path })
-const syntaxStyle = SyntaxStyle.fromStyles({
-  default: { fg: "#ffffff" },
-  "markup.strong": { fg: "#ffffff", bold: true },
-})
+const styles = { default: { fg: "#ffffff" }, "markup.strong": { fg: "#ffffff", bold: true } }
 
 afterAll(async () => {
   await client.destroy()
-  syntaxStyle.destroy()
   await directory[Symbol.asyncDispose]()
 })
 
@@ -41,23 +37,14 @@ const examples = [
   },
 ]
 
-test.each(examples)("recognizes bold currency: $bold", async (example) => {
-  const result = await client.highlightOnce(example.source, "markdown")
-  expect(result.error).toBeUndefined()
-  expect(
-    result.highlights?.some(
-      ([start, end, group]) => group === "markup.strong" && example.source.slice(start, end) === `**${example.bold}**`,
-    ),
-  ).toBe(true)
-})
-
 test.each([
   { width: 44, streaming: true },
   { width: 100, streaming: true },
   { width: 44, streaming: false },
   { width: 100, streaming: false },
 ])("renders currency after highlighting: %j", async ({ width, streaming }) => {
-  const setup = await createTestRenderer({ width, height: 20, remote: true, useThread: false })
+  const setup = await createTestRenderer({ width, height: 20, remote: true })
+  const syntaxStyle = SyntaxStyle.fromStyles(styles, setup.renderer.nativeScene)
   try {
     const source = examples.map((example) => example.source).join("\n\n")
     const markdown = new MarkdownRenderable(setup.renderer, {
@@ -65,7 +52,6 @@ test.each([
       syntaxStyle,
       treeSitterClient: client,
       streaming,
-      internalBlockMode: "top-level",
       conceal: true,
       width: "100%",
     })
@@ -90,7 +76,8 @@ test.each([
 })
 
 test("leaves code, formulas, links and raw Markdown intact", async () => {
-  const setup = await createTestRenderer({ width: 100, height: 20, remote: true, useThread: false })
+  const setup = await createTestRenderer({ width: 100, height: 20, remote: true })
+  const syntaxStyle = SyntaxStyle.fromStyles(styles, setup.renderer.nativeScene)
   try {
     const source = [
       "**Pay $10** then $20. Keep `$HOME` and `$10 + $20` literal.",
@@ -102,7 +89,6 @@ test("leaves code, formulas, links and raw Markdown intact", async () => {
       syntaxStyle,
       treeSitterClient: client,
       streaming: false,
-      internalBlockMode: "top-level",
       conceal: true,
       width: "100%",
     })

@@ -7,14 +7,16 @@ import { chmod, mkdir } from "node:fs/promises"
 import path from "node:path"
 import { clickedLink, clickedPath, clickedUrl, openLink } from "../../src/ui/link"
 import { tmpdir } from "../fixture/fixture"
+import { onCleanup } from "solid-js"
 
 const url = "https://example.com/catalog/moparts,2004,dodge,ram+1500,4.7l+v8,1432463,brake+pad"
-const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } })
 
 test("plain clicks on any row of a wrapped Markdown link resolve the full URL", async () => {
   const opened: string[] = []
   function Transcript() {
     const renderer = useRenderer()
+    const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } }, renderer.nativeScene)
+    onCleanup(() => syntaxStyle.destroy())
     return (
       <box
         onMouseUp={(event) => {

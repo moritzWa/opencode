@@ -9,9 +9,10 @@ import {
   type WidthMethod,
   type RGBA,
   type SyntaxStyle,
+  type OptimizedBuffer,
 } from "@opentui/core"
-import { useRenderer } from "@opentui/solid"
-import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
+import { useRenderer, useTerminalDimensions } from "@opentui/solid"
+import { createEffect, createMemo, createSignal, on, onCleanup, Show } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { useConfig } from "../../config"
 import { Keymap } from "../../context/keymap"
@@ -24,7 +25,8 @@ const CURRENT_REF = 0x5e02
 type SearchTarget = {
   text: string
   read: () => string
-  buffer: TextBuffer
+  buffer?: TextBuffer
+  left: () => number
   top: () => number
   lines: () => LineInfo
   alive: () => boolean
@@ -37,6 +39,8 @@ export type SearchMatch = {
   end: number
   column: number
   line: number
+  index: number
+  value: string
 }
 type SearchStyle = { match: { fg: RGBA; bg: RGBA }; current: { fg: RGBA; bg: RGBA } }
 
@@ -69,6 +73,8 @@ export function findMatches(root: Renderable, query: string, widthMethod: WidthM
       end: columns.highlight[hit.index + hit[0].length],
       column: columns.line[hit.index],
       line: columns.line[hit.index] - columns.highlight[hit.index],
+      index: hit.index,
+      value: hit[0],
     }))
   })
 }
@@ -80,7 +86,7 @@ export function matchRow(match: SearchMatch) {
 
 export function clearHighlights(matches: SearchMatch[]) {
   new Set(matches.map((match) => match.target)).forEach((target) => {
-    if (!target.alive()) return
+    if (!target.alive() || !target.buffer) return
     target.buffer.removeHighlightsByRef(MATCH_REF)
     target.buffer.removeHighlightsByRef(CURRENT_REF)
     target.redraw()
@@ -89,7 +95,7 @@ export function clearHighlights(matches: SearchMatch[]) {
 
 export function highlightMatches(matches: SearchMatch[], current: number, style: SearchStyle) {
   matches.forEach((match, index) => {
-    if (!match.target.alive()) return
+    if (!match.target.alive() || !match.target.buffer) return
     const syntax = match.target.buffer.getSyntaxStyle()
     if (!syntax) return
     const ids = styleIds(syntax, style)
@@ -112,6 +118,38 @@ export function highlightMatches(matches: SearchMatch[], current: number, style:
   })
 }
 
+export function paintSearchMatches(
+  buffer: OptimizedBuffer,
+  matches: SearchMatch[],
+  current: number,
+  style: SearchStyle,
+  viewport: { x: number; y: number; width: number; height: number },
+  widthMethod: WidthMethod,
+) {
+  matches.forEach((match, index) => {
+    if (!match.target.alive() || match.target.buffer?.getSyntaxStyle() || match.target.read() !== match.target.text)
+      return
+    const columns = measureColumns(match.target.text, widthMethod)
+    const lines = match.target.lines().lineStartCols
+    const color = index === current ? style.current : style.match
+    for (const grapheme of new Intl.Segmenter().segment(match.value)) {
+      if (grapheme.segment === "\n") continue
+      const offset = match.index + grapheme.index
+      const column = columns.line[offset]
+      const row = lines.findLastIndex((start) => start <= column)
+      const x = match.target.left() + column - (lines[row] ?? 0)
+      const y = match.target.top() + Math.max(row, 0)
+      if (x < viewport.x || x >= viewport.x + viewport.width || y < viewport.y || y >= viewport.y + viewport.height)
+        continue
+      if (x < 0 || y < 0 || x >= buffer.width || y >= buffer.height) continue
+      const attributes = buffer.withBuffers((cells) => cells.attributes[y * cells.width + x])
+      buffer.pushScissorRect(viewport.x, viewport.y, viewport.width, viewport.height)
+      buffer.drawText(grapheme.segment, x, y, color.fg, color.bg, attributes)
+      buffer.popScissorRect()
+    }
+  })
+}
+
 export function createSessionSearch(input: {
   scroll: () => ScrollBoxRenderable | undefined
   content: () => unknown
@@ -124,6 +162,14 @@ export function createSessionSearch(input: {
   const [matches, setMatches] = createSignal<SearchMatch[]>([])
   const [current, setCurrent] = createSignal(-1)
   const style = createMemo(() => searchStyle(theme))
+  // Native text nodes no longer expose a TextBuffer. Paint search colors after layout without rewriting Markdown.
+  const paint = (buffer: OptimizedBuffer) => {
+    const scroll = input.scroll()
+    if (!active() || !scroll) return
+    paintSearchMatches(buffer, matches(), current(), style(), scroll.viewport, renderer.widthMethod)
+  }
+  renderer.addPostProcessFn(paint)
+  onCleanup(() => renderer.removePostProcessFn(paint))
 
   function rescan(viewport = false) {
     const scroll = input.scroll()
@@ -131,11 +177,11 @@ export function createSessionSearch(input: {
     const previous = matches()[current()]
     const row = !viewport && previous?.target.alive() ? matchRow(previous) : scroll.viewport.y
     clearHighlights(matches())
-    const found = findMatches(scroll.content, query(), renderer.widthMethod)
+    const found = findMatches(scroll, query(), renderer.widthMethod)
     // Preserve the exact occurrence on a wrapped line when the node survives a restyle.
     const exact =
       !viewport && previous
-        ? found.findIndex((hit) => hit.target.buffer === previous.target.buffer && hit.start === previous.start)
+        ? found.findIndex((hit) => hit.target.read === previous.target.read && hit.start === previous.start)
         : -1
     const index =
       exact >= 0
@@ -191,6 +237,7 @@ export function createSessionSearch(input: {
             match.target.read() !== match.target.text ||
             (matchRow(match) >= scroll.viewport.y &&
               matchRow(match) < scroll.viewport.y + scroll.viewport.height &&
+              match.target.buffer !== undefined &&
               !match.target.buffer.getLineHighlights(match.line).some((item) => item.hlRef === MATCH_REF)),
         )
       )
@@ -221,6 +268,7 @@ export function createSessionSearch(input: {
 
 export function SessionSearchBar(props: { search: ReturnType<typeof createSessionSearch> }) {
   const theme = useTheme()
+  const dimensions = useTerminalDimensions()
   const config = useConfig()
   Keymap.createLayer(() => ({
     priority: 20,
@@ -247,14 +295,18 @@ export function SessionSearchBar(props: { search: ReturnType<typeof createSessio
         cursorStyle={config.data.cursor}
         flexGrow={1}
       />
-      <text fg={theme.text.muted}>
+      <text fg={theme.text.muted} flexShrink={0}>
         {props.search.query()
           ? props.search.total()
             ? `${props.search.current() + 1}/${props.search.total()}`
             : "no matches"
           : ""}
       </text>
-      <text fg={theme.text.muted}>enter/↓ next · ↑ prev · esc</text>
+      <Show when={dimensions().width >= 70}>
+        <text fg={theme.text.muted} flexShrink={0}>
+          enter/↓ next · ↑ prev · esc
+        </text>
+      </Show>
     </box>
   )
 }
@@ -274,6 +326,7 @@ function targetsOf(node: Renderable): SearchTarget[] {
         text: node.plainText,
         read: () => node.plainText,
         buffer: (node as unknown as { textBuffer: TextBuffer }).textBuffer,
+        left: () => node.x,
         top: () => node.y,
         lines: () => node.lineInfo,
         alive: () => !node.isDestroyed,
@@ -294,6 +347,7 @@ function targetsOf(node: Renderable): SearchTarget[] {
       text: cell.textBuffer.getPlainText(),
       read: () => cell.textBuffer.getPlainText(),
       buffer: cell.textBuffer,
+      left: () => node.x,
       top: () => node.y + (table._layout?.rowOffsets[rowIndex] ?? 0) + 1 + (table._cellPaddingY ?? 0),
       lines: () => cell.textBufferView.lineInfo,
       alive: () => !node.isDestroyed && table._cells?.[rowIndex]?.includes(cell) === true,
@@ -319,13 +373,9 @@ function measureColumns(text: string, widthMethod: WidthMethod) {
   }
   const graphemes = [...new Intl.Segmenter().segment(text)]
   const lib = resolveRenderLib()
-  const encoded = lib.encodeUnicode(text, widthMethod)
-  const widths = encoded?.data.map((item) => item.width)
-  if (encoded) lib.freeUnicode(encoded)
-  const cells = graphemes.filter((item) => item.segment !== "\n")
+  const encoder = new TextEncoder()
   let width = 0
   let newlines = 0
-  let cell = 0
   graphemes.forEach((grapheme) => {
     highlight.fill(width, grapheme.index, grapheme.index + grapheme.segment.length)
     line.fill(width + newlines, grapheme.index, grapheme.index + grapheme.segment.length)
@@ -333,7 +383,7 @@ function measureColumns(text: string, widthMethod: WidthMethod) {
       newlines++
       return
     }
-    width += widths?.length === cells.length ? widths[cell++] : Bun.stringWidth(grapheme.segment)
+    width += lib.editMeasureText(encoder.encode(grapheme.segment), widthMethod, 4)
   })
   highlight[text.length] = width
   line[text.length] = width + newlines

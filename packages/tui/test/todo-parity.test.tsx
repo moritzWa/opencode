@@ -59,13 +59,13 @@ test.each([100, 44])(
       },
     })
     await setup.ready
-    await waitForHighlightedFrame(setup, (frame) => frame.includes("Todo list cleared") && frame.includes("after.ts"))
+    await waitForHighlightedFrame(setup, (frame) => frame.includes("Cleared todos") && frame.includes("after.ts"))
     const frame = setup.captureCharFrame()
-    expect(frame.match(/# Todos/g)).toHaveLength(2)
+    expect(frame.match(/# Todos/g)).toHaveLength(1)
     expect(frame).toContain("[✓] Old completed work")
     expect(frame).toContain("[•] Current running work")
     expect(frame).toContain("[ ] Next pending work")
-    expect(frame).toContain("[ ] Cancelled approach")
+    expect(frame).toContain("[-] Cancelled approach")
     expect(frame).toContain("before.ts")
     expect(frame).toContain("after.ts")
     expect(frame).not.toContain("todos=[object")

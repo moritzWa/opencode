@@ -11,8 +11,10 @@ import { AbsolutePath } from "@opencode/core/schema"
 import { WebSearch } from "@opencode/core/websearch"
 import { Effect, Stream } from "effect"
 
-type Overrides = Partial<Omit<Plugin.Context, "options" | "session">> & {
+type EventSource = ReturnType<Plugin.Context["event"]["subscribe"]>
+type Overrides = Partial<Omit<Plugin.Context, "options" | "session" | "event">> & {
   readonly session?: Partial<Plugin.Context["session"]>
+  readonly event?: { readonly subscribe: () => EventSource }
 }
 export function host(overrides: Overrides = {}): Plugin.Context {
   return {
@@ -68,12 +70,24 @@ export function host(overrides: Overrides = {}): Plugin.Context {
     credential: overrides.credential ?? {
       activate: () => Effect.die("unused credential.activate"),
     },
-    event: overrides.event ?? {
-      subscribe: () => Stream.empty,
-    },
+    event: { subscribe: events(overrides.event?.subscribe ?? (() => Stream.empty)) },
     experimental: overrides.experimental ?? {
       terminal: {
         read: () => Effect.die("unused experimental.terminal.read"),
+      },
+      generate: {
+        text: () => Effect.die("unused experimental.generate.text"),
+        image: () => Effect.die("unused experimental.generate.image"),
+        decisions: () => Effect.die("unused experimental.generate.decisions"),
+      },
+      artifact: {
+        transform: () => Effect.die("unused experimental.artifact.transform"),
+        reload: () => Effect.die("unused experimental.artifact.reload"),
+      },
+      automation: {
+        create: () => Effect.die("unused experimental.automation.create"),
+        list: () => Effect.die("unused experimental.automation.list"),
+        delete: () => Effect.die("unused experimental.automation.delete"),
       },
     },
     generate: overrides.generate ?? {
@@ -522,4 +536,11 @@ function located<A>(data: A) {
     }),
     data,
   }
+}
+
+// Filter like the real host, so a fake source can emit any event type.
+function events(source: () => EventSource) {
+  const subscribe = (input?: { readonly types?: ReadonlyArray<string> }): EventSource =>
+    source().pipe(Stream.filter((event) => !input?.types?.length || input.types.includes(event.type)))
+  return subscribe as Plugin.Context["event"]["subscribe"]
 }

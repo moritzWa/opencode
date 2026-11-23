@@ -107,7 +107,7 @@ async function runCLI(
     return undefined
   }, events)
   const server = Bun.serve({ port: 0, idleTimeout: 0, fetch: (request) => calls.fetch(request) })
-  const output = await createTestRenderer({ width: 140, height: 38, useThread: false, remote: true })
+  const output = await createTestRenderer({ width: 140, height: 38, remote: true })
   const child = spawn(binary ?? "", ["--server", server.url.toString(), "--session", session.id], {
     name: "xterm-256color",
     cols: 140,
