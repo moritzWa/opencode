@@ -11,7 +11,7 @@ const e2e = executable ? test : test.skip
 
 const SUMMARY = "## Objective\n- test\n\n## Requirements\n- (none)\n\n## Decisions\n- (none)\n\n## Work State\n### Completed\n- (none)\n\n### Active\n- (none)\n\n### Blocked\n- (none)\n\n## Next Move\n1. (none)\n\n## Relevant Files\n(none)\n\n## Important Context\n- (none)"
 
-e2e("a Grok session returns to Sonnet on its next prompt, compacting first, and a fresh Grok pick sticks", async () => {
+e2e.each([false, true])("Grok sessions only return when opted in (returnToClaude=%s)", async (returnToClaude) => {
   const root = fileURLToPath(new URL("../", import.meta.url))
   const directory = mkdtempSync(join(tmpdir(), "return-e2e-"))
   const requests: Array<{ kind: "chat" | "summary"; model: string }> = []
@@ -65,7 +65,7 @@ e2e("a Grok session returns to Sonnet on its next prompt, compacting first, and 
     await Bun.write(join(legacyRoot, "dist/refresh-lock.js"), "export const acquireRefreshLock = () => ({release(){}})")
     await Bun.write(join(directory, "config/opencode.json"), JSON.stringify({
       providers: { xai: { settings: { apiKey: "fake", baseURL: `http://127.0.0.1:${upstream.port}/v1` } } },
-      plugins: [{ package: root, options: { legacyRoot, diagnostics: join(directory, "diagnostics.sqlite"), upstream: `http://127.0.0.1:${upstream.port}`, compactAbove: 0 } }],
+      plugins: [{ package: root, options: { legacyRoot, diagnostics: join(directory, "diagnostics.sqlite"), upstream: `http://127.0.0.1:${upstream.port}`, compactAbove: 0, ...(returnToClaude ? { returnToClaude: true } : {}) } }],
     }))
     const selection = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) })
     const port = selection.port
@@ -116,6 +116,16 @@ e2e("a Grok session returns to Sonnet on its next prompt, compacting first, and 
     await call("POST", `/api/session/${id}/model`, { model: { providerID: "xai", id: "grok-4.7" } })
     expect((await model(id)).providerID).toBe("xai")
     await call("POST", `/api/session/${id}/prompt`, { text: "second question" })
+    if (!returnToClaude) {
+      const deadline = Date.now() + 30000
+      while (xai === 0 && Date.now() < deadline) await Bun.sleep(100)
+      expect(xai).toBeGreaterThan(0)
+      expect((await model(id)).providerID).toBe("xai")
+      expect(requests.map((item) => item.kind)).toEqual(["chat"])
+      const info = (await call("GET", `/api/session/${id}`)).data as { metadata?: { modelReturn?: unknown } }
+      expect(info.metadata?.modelReturn).toBeUndefined()
+      return
+    }
     await idle(id)
     expect((await model(id)).providerID).toBe("anthropic")
     expect(xai).toBe(0)

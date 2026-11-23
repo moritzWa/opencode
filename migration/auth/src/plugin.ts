@@ -91,9 +91,10 @@ export const SubscriptionPlugin: Plugin = {
         event.headers["x-subscription-gateway"] = proxy.secret
         event.headers["x-subscription-session"] = event.sessionID
       }, { providerID: "anthropic" }))
-      // A session parked on the last-resort model returns to Sonnet on its next prompt once Claude is usable.
+      // Returning historical Grok sessions is opt-in; explicit model selections otherwise stay put.
       // Never block the prompt: any failure here leaves the session where it is.
       await keep(context.session.hook("prompt", async (event) => {
+        if (context.options.returnToClaude !== true) return
         try {
           const session = await context.session.get({ sessionID: event.sessionID })
           if (session.model?.providerID !== LAST_RESORT.providerID) return

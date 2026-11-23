@@ -283,6 +283,9 @@ A single failure still does not (`persistent` is set only after that attempt).
 catalog. Its constant is retained only to recognize historical selections.
 
 A `prompt` hook returns a session on that model to `anthropic/claude-sonnet-5-5`
+only when the plugin option `returnToClaude: true` is set. By default, existing
+Grok sessions and manual selections stay on Grok. Grok is available for manual
+use but never participates in the automatic fallback ladder. The return runs
 when its next prompt arrives, if Claude is not held or cooling, the session is not
 running, and Sonnet is available. If the history is over 300k tokens
 (`COMPACT_ABOVE`, measured from the last answered request) a manual compaction is
