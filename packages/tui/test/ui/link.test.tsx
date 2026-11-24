@@ -149,10 +149,12 @@ test("plain clicks resolve local paths that wrap across rows", async () => {
 test("local links open existing files and refuse programs and missing paths", async () => {
   await using root = await tmpdir()
   await mkdir(path.join(root.path, "Thing.app"))
-  await Bun.write(path.join(root.path, "run"), "#!/bin/sh")
-  await chmod(path.join(root.path, "run"), 0o755)
+  // Windows has no POSIX executable bit; programs there are identified by extension.
+  const program = path.join(root.path, process.platform === "win32" ? "run.exe" : "run")
+  await Bun.write(program, "#!/bin/sh")
+  await chmod(program, 0o755)
   await expect(openLink("Thing.app", root.path)).rejects.toThrow("Not opening a program")
-  await expect(openLink(path.join(root.path, "run"), root.path)).rejects.toThrow("Not opening a program")
+  await expect(openLink(program, root.path)).rejects.toThrow("Not opening a program")
   await expect(openLink("nope/missing.xlsx", root.path)).rejects.toThrow("No such file or directory")
   await expect(openLink("ms-msdt:/id PCWDiagnostic", root.path)).rejects.toThrow("No such file or directory")
 })

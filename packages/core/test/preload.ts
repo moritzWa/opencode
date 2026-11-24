@@ -14,6 +14,11 @@ process.env.XDG_CACHE_HOME = path.join(home, ".cache")
 process.env.XDG_STATE_HOME = path.join(home, ".local", "state")
 process.env.OPENCODE_CONFIG_DIR = path.join(home, ".config", "opencode")
 process.env.TMPDIR = path.join(home, "tmp")
+if (process.platform === "win32") {
+  process.env.USERPROFILE = home
+  process.env.TMP = process.env.TMPDIR
+  process.env.TEMP = process.env.TMPDIR
+}
 mkdirSync(process.env.TMPDIR)
 for (const key of [
   "OPENCODE_CONFIG",

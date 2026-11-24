@@ -61,7 +61,7 @@ export function clickedPath(renderer: CliRenderer, event: MouseEvent, directory:
   const from = inside >= 0 ? inside : after - 1
   const to = inside >= 0 ? inside : after
   const matches = words.flatMap((first, at) => {
-    if (at > from || !/^[`"'(\[<]*(?:~|\.{0,2})?\//.test(first.text)) return []
+    if (at > from || !/^[`"'(\[<]*(?:(?:~|\.{0,2})?\/|[a-z]:[\\/]|\\\\)/i.test(first.text)) return []
     // Unescaped spaces are common in pasted paths, so try each longer run of words and keep the longest match. Across a
     // wrap the separating space is dropped, while a word wrapped mid-token has none.
     let runs = [first.text]
@@ -197,10 +197,11 @@ export function plainClick(renderer: CliRenderer, event: MouseEvent) {
 }
 
 function existingPath(text: string, directory: string) {
-  const cleaned = text
-    .replace(/^[`"'(\[<]+/, "")
-    .replace(/[`"')\]>.,;:!?]+$/, "")
-    .replace(/\\(.)/g, "$1")
+  const unquoted = text.replace(/^[`"'(\[<]+/, "").replace(/[`"')\]>.,;:!?]+$/, "")
+  // Backslashes in drive/UNC paths are separators, not POSIX shell escapes.
+  const cleaned = /^(?:[a-z]:[\\/]|\\\\)/i.test(unquoted)
+    ? unquoted.replace(/\\ /g, " ")
+    : unquoted.replace(/\\(.)/g, "$1")
   const value = cleaned.startsWith("file://") && URL.canParse(cleaned) ? fileURLToPath(cleaned) : cleaned
   if (!value) return
   const candidates = path.isAbsolute(value)

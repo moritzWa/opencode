@@ -118,6 +118,26 @@ jobs:
           git config --global user.email "bot@opencode.ai"
           git config --global user.name "opencode"
 
+      # Provision before the suites: their HTTP guard must never download tools during a test.
+      - name: Install ripgrep on Linux
+        if: runner.os == 'Linux'
+        run: |
+          archive="$RUNNER_TEMP/ripgrep.tar.gz"
+          curl --fail --location --retry 3 https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz --output "$archive"
+          printf '%s  %s\n' '1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599' "$archive" | sha256sum --check
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/ripgrep-15.1.0-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+
+      - name: Install ripgrep on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'ripgrep.zip'
+          Invoke-WebRequest 'https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-pc-windows-msvc.zip' -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne '124510b94b6baa3380d051fdf4650eaa80a302c876d611e9dba0b2e18d87493a') { throw 'ripgrep archive checksum mismatch' }
+          Expand-Archive $archive -DestinationPath $env:RUNNER_TEMP
+          Join-Path $env:RUNNER_TEMP 'ripgrep-15.1.0-x86_64-pc-windows-msvc' >> $env:GITHUB_PATH
+
       - name: Run unit tests
         timeout-minutes: 20
         run: |
