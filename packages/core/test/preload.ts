@@ -5,7 +5,12 @@ import os from "node:os"
 import path from "node:path"
 
 // The harness profile exports live config paths. Never discover those integrations in package tests.
-const home = realpathSync(mkdtempSync(path.join(os.tmpdir(), "opencode-test-home-")))
+// Windows AF_UNIX socket paths are bounded too. Avoid nesting another long home under the test launcher.
+const home = realpathSync(
+  mkdtempSync(
+    path.join(process.platform === "win32" ? (process.env.RUNNER_TEMP ?? os.tmpdir()) : os.tmpdir(), "oc-home-"),
+  ),
+)
 process.env.HOME = home
 process.env.OPENCODE_TEST_HOME = home
 process.env.XDG_CONFIG_HOME = path.join(home, ".config")

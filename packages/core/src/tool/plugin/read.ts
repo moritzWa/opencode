@@ -5,6 +5,7 @@ import path, { basename, dirname, extname, isAbsolute, join, relative } from "pa
 import { ToolFailure } from "@opencode/ai/effect"
 import { Effect, Schema } from "effect"
 import { FSUtil } from "@opencode/util/fs-util"
+import { Hash } from "@opencode/util/hash"
 import { Config } from "../../config.js"
 import { ConfigEntryObserver } from "../../config/plugin/entry-observer.js"
 import { Flag } from "../../flag.js"
@@ -170,7 +171,7 @@ export const Plugin = {
               const content = toModelContent(result.path, input.offset, result.content)
               if (result.content.type !== "text" || typeof content !== "string")
                 return { output: result.content, path: result.path }
-              const readHash = Bun.hash(`${result.target.absolute}\u0000${content}`).toString()
+              const readHash = Hash.fast(`${result.target.absolute}\u0000${content}`)
               const history = yield* sessions.context(context.sessionID).pipe(Effect.orElseSucceed(() => []))
               // Only a full output still in the current context is evidence. Suppressed reads
               // carry no hash, and retained metadata alone cannot keep a pruned output alive.
@@ -205,7 +206,8 @@ export const Plugin = {
                         name: result.output.name,
                       }
                     : result.output,
-                content: "content" in result ? result.content : toModelContent(result.path, input.offset, result.output),
+                content:
+                  "content" in result ? result.content : toModelContent(result.path, input.offset, result.output),
                 metadata: {
                   truncated: result.output.type !== "media" && result.output.next !== undefined,
                   ...("readHash" in result && result.readHash !== undefined ? { readHash: result.readHash } : {}),
