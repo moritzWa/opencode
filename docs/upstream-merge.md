@@ -44,16 +44,9 @@ Run package tests with isolated home/config/data roots. Never boot the candidate
 against the installed database or discover the user's real MCPs during tests.
 Regenerate database and client artifacts using their generators.
 
-The native CLI compiles. Focused Core recovery/compaction/shell tests, native
-Markdown/search/selection tests, and the packed subscription-auth loader have
-passed during integration. The broad package runs still require final acceptance;
-intermediate results are not a claim that the integration is ready to install.
-
-Latest full Core run: 8,038 passed, 27 skipped, zero failures. Protocol: 17 passed.
-The full Server run passed 174 tests with two stale Location-routing expectations;
-both pass after moving the test off the now-global instruction-entry endpoint.
-The full TUI run passed 1,794 tests with one wrapped-path fixture failure under
-the longer isolated home path. Final reruns remain required.
+The native CLI compiles. Full local suites pass: Core 8,038, TUI 1,795,
+Server 176, and Protocol 17 (10,026 tests, zero failures). Full lint/typechecking,
+official TypeScript checks, and packed subscription-auth loader tests pass.
 
 **Installation gate:** the installed read-aloud highlighter uses the removed
 Markdown `_blockStates` and text-buffer internals. It needs an adapter and muted,
@@ -63,11 +56,20 @@ database unchanged until the gate is cleared.
 
 ## Follow-up validation
 
-Blacksmith's authenticated personal-account GitHub Actions dashboard explicitly
-states that personal accounts are unsupported. Its GitHub App was authorized
-for only `moritzWa/opencode` and both cancelled jobs were retried. That does not
-remove the provider's account restriction. A supported organization or provider
-exception is required; runner labels and check requirements have not changed.
+The fork uses standard GitHub-hosted validation runners, not Blacksmith.
+The process-daemon workflows use `macos-15` for ARM64 and retain `macos-15-intel`
+for x64. Both process-daemon workflows pass on the migrated head, including
+tests, builds, smoke tests, and package validation. A transient macOS runner
+acquisition failure passed on retry; it was not a test or billing failure.
+The publishing step stayed skipped. General check, unit/build/browser, docs,
+and Nix validation runner labels also map to `ubuntu-24.04` and `windows-2025`.
+No test commands, matrices, conditions, timeouts, or coverage were removed.
+Deployment and product release workflows are outside this validation migration.
+
+The authenticated account dashboard showed a $30/month Actions budget with
+stop-at-limit enabled, $0 billed, and $11.35 of $12 included compute used.
+Standard-runner compute for this public fork is free independently of that
+allowance. Artifact/cache storage is separate. No billing setting was changed.
 
 Read-aloud's adapter is in companion draft PR
 https://github.com/moritzWa/opencode-read-aloud/pull/43 . Three native renderer
@@ -93,5 +95,5 @@ initialization applies no migrations. Reports are retained locally in
 `~/Documents/opencode-upgrade-validation/`; they contain no assertion that a
 candidate server was run against live data. The live source was opened read-only.
 
-The remaining publication blocker is required Blacksmith CI, not these local
-compatibility validations. Both integration and companion plugin PRs stay draft.
+General CI validation on the migrated runners remains a publication gate.
+Both integration and companion plugin PRs stay draft until acceptance is complete.
