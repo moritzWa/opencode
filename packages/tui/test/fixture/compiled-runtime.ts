@@ -35,8 +35,9 @@ await using setup = await createAppFixture({
 await setup.ready
 async function frame(text: string) {
   const deadline = Date.now() + 10_000
-  while (!setup.captureCharFrame().includes(text)) {
-    assert.ok(Date.now() < deadline, `missing ${text}:\n${setup.captureCharFrame()}`)
+  // The renderer runs asynchronously. Capture only once its active native frame has finished.
+  while (!(await setup.waitForFrame(() => true)).includes(text)) {
+    assert.ok(Date.now() < deadline, `missing ${text}`)
     await setup.renderOnce()
     await Bun.sleep(10)
   }
