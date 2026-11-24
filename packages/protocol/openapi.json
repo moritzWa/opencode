@@ -3535,6 +3535,82 @@
         }
       }
     },
+    "/api/session/{sessionID}/inbox/{id}/withdraw": {
+      "post": {
+        "tags": ["session"],
+        "operationId": "session.inbox.withdraw",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/Session.ID"
+            },
+            "required": true
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/Session.Message.ID"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["accepted"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Withdraw a pending user input or the latest delivered user input before assistant output starts. Returns accepted only when withdrawal commits.",
+        "summary": "Withdraw unanswered input"
+      }
+    },
     "/api/experimental/session/{sessionID}/instructions/entries": {
       "get": {
         "tags": ["session"],
@@ -3840,6 +3916,104 @@
                   }
                 },
                 "required": ["prompt"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/api/session/{sessionID}/generate-object": {
+      "post": {
+        "tags": ["session"],
+        "operationId": "session.generateObject",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/Session.ID"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "SessionGenerateObjectResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionGenerateObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError | LocationNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailableError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Generate transient schema-validated output without mutating session history.",
+        "summary": "Generate structured output from session context",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "schema": {
+                    "type": "object"
+                  }
+                },
+                "required": ["prompt", "schema"],
                 "additionalProperties": false
               }
             }
@@ -8490,6 +8664,177 @@
         "summary": "Activate credential"
       }
     },
+    "/api/tui/select-session": {
+      "post": {
+        "tags": ["tui"],
+        "operationId": "tui.selectSession",
+        "parameters": [],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Publish a global session selection event. Supply client to target one attached TUI and targetDirectory to move it across directories before navigation.",
+        "summary": "Select a TUI session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionID": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/Session.ID"
+                      },
+                      {
+                        "description": "Session ID to navigate to"
+                      }
+                    ]
+                  },
+                  "client": {
+                    "type": "string",
+                    "description": "Only the TUI with this client id navigates. Omit to navigate every attached TUI."
+                  },
+                  "targetDirectory": {
+                    "type": "string",
+                    "description": "Directory to move the TUI to before showing the session. Omit to keep its current directory."
+                  }
+                },
+                "required": ["sessionID"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/api/tui/execute-command": {
+      "post": {
+        "tags": ["tui"],
+        "operationId": "tui.executeCommand",
+        "parameters": [],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Publish a global command event for one attached TUI identified by client.",
+        "summary": "Execute a targeted TUI command",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "session.list",
+                          "session.new",
+                          "session.interrupt",
+                          "session.background",
+                          "session.compact",
+                          "session.page.up",
+                          "session.page.down",
+                          "session.line.up",
+                          "session.line.down",
+                          "session.half.page.up",
+                          "session.half.page.down",
+                          "session.first",
+                          "session.last",
+                          "prompt.clear",
+                          "prompt.submit",
+                          "agent.cycle"
+                        ]
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "client": {
+                    "type": "string"
+                  }
+                },
+                "required": ["command", "client"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
     "/api/project": {
       "get": {
         "tags": ["project"],
@@ -10236,6 +10581,107 @@
         "summary": "List skills"
       }
     },
+    "/api/skill/diagnostics": {
+      "get": {
+        "tags": ["skill"],
+        "operationId": "skill.diagnostics",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "directory": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Absolute path of the directory."
+                }
+              },
+              "additionalProperties": false
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true,
+            "description": "Location to run the request in, sent as location[directory]. Omit to use the server's default location."
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "location": {
+                      "$ref": "#/components/schemas/Location.PublicRef"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Skill.Diagnostic"
+                      }
+                    }
+                  },
+                  "required": ["location", "data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "LocationNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailableError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Report loaded, skipped, shadowed, and unadvertised skill sources for this location.",
+        "summary": "Get skill discovery diagnostics"
+      }
+    },
     "/api/rpc/{rpcID}/{method}": {
       "post": {
         "tags": ["rpc"],
@@ -10394,6 +10840,7 @@
                     "session.inbox.delivered",
                     "session.inbox.enqueued",
                     "session.inbox.cancelled",
+                    "session.inbox.withdrawn",
                     "session.inbox.delivery.changed",
                     "session.execution.started",
                     "session.execution.succeeded",
@@ -10506,6 +10953,7 @@
                           "session.inbox.delivered",
                           "session.inbox.enqueued",
                           "session.inbox.cancelled",
+                          "session.inbox.withdrawn",
                           "session.inbox.delivery.changed",
                           "session.execution.started",
                           "session.execution.succeeded",
@@ -24027,6 +24475,26 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "tuiSessionSelect": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "tuiExecuteCommand": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "additionalProperties": false
@@ -24110,6 +24578,9 @@
           },
           {
             "$ref": "#/components/schemas/session.inbox.cancelled"
+          },
+          {
+            "$ref": "#/components/schemas/session.inbox.withdrawn"
           },
           {
             "$ref": "#/components/schemas/session.inbox.delivery.changed"
@@ -25626,6 +26097,21 @@
         "required": ["_tag", "sessionID", "message"],
         "additionalProperties": false
       },
+      "SessionGenerateObjectResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "object": {}
+            },
+            "required": ["object"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["data"],
+        "additionalProperties": false
+      },
       "SessionGenerateResponse": {
         "type": "object",
         "properties": {
@@ -26207,6 +26693,26 @@
         "required": ["_tag", "id", "message"],
         "additionalProperties": false
       },
+      "Skill.Diagnostic": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/Skill.ID"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["loaded", "skipped", "unadvertised", "shadowed"]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": ["path", "status"],
+        "additionalProperties": false
+      },
       "Skill.ID": {
         "type": "string"
       },
@@ -26627,6 +27133,9 @@
           },
           {
             "$ref": "#/components/schemas/session.inbox.cancelled"
+          },
+          {
+            "$ref": "#/components/schemas/session.inbox.withdrawn"
           },
           {
             "$ref": "#/components/schemas/session.inbox.delivery.changed"
@@ -29538,6 +30047,58 @@
         "required": ["id", "created", "type", "durable", "data"],
         "additionalProperties": false
       },
+      "session.inbox.withdrawn": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Event.ID"
+          },
+          "created": {
+            "type": "number"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["session.inbox.withdrawn"]
+          },
+          "durable": {
+            "type": "object",
+            "properties": {
+              "aggregateID": {
+                "type": "string"
+              },
+              "seq": {
+                "$ref": "#/components/schemas/Event.Seq"
+              },
+              "version": {
+                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+              }
+            },
+            "required": ["aggregateID", "seq", "version"],
+            "additionalProperties": false
+          },
+          "location": {
+            "$ref": "#/components/schemas/Location.Ref"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "sessionID": {
+                "$ref": "#/components/schemas/Session.ID"
+              },
+              "inboxID": {
+                "$ref": "#/components/schemas/Session.Message.ID"
+              }
+            },
+            "required": ["sessionID", "inboxID"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "created", "type", "durable", "data"],
+        "additionalProperties": false
+      },
       "session.instructions.updated": {
         "type": "object",
         "properties": {
@@ -31828,6 +32389,10 @@
           "data": {
             "type": "object",
             "properties": {
+              "client": {
+                "type": "string",
+                "description": "Only the TUI with this client id executes the command."
+              },
               "command": {
                 "anyOf": [
                   {
@@ -31928,6 +32493,14 @@
                     "description": "Session ID to navigate to"
                   }
                 ]
+              },
+              "client": {
+                "type": "string",
+                "description": "Only the TUI with this client id navigates. Omit to navigate every attached TUI."
+              },
+              "targetDirectory": {
+                "type": "string",
+                "description": "Directory to move the TUI to before showing the session. Omit to keep its current directory."
               }
             },
             "required": ["sessionID"],
@@ -32195,6 +32768,9 @@
     },
     {
       "name": "credential"
+    },
+    {
+      "name": "tui"
     },
     {
       "name": "project",

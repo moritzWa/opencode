@@ -142,7 +142,7 @@ test("plain clicks resolve local paths that wrap across rows", async () => {
       const word = rows[y]!.match(/\S+/)!
       await app.mockMouse.click(word.index! + (word[0] === "┃" ? 3 : Math.min(3, word[0].length - 1)), y)
     }
-    expect(clicked).toEqual(at.map(() => file))
+    expect(clicked, rows.join("\n")).toEqual(at.map(() => file))
   } finally {
     app.renderer.destroy()
   }
