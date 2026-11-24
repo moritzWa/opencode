@@ -180,7 +180,8 @@ function screenWords(renderer: CliRenderer, event: MouseEvent) {
   const words = rows.flatMap((text, at) =>
     Math.abs(at - event.y) > 7
       ? []
-      : [...text.matchAll(/(?:\\.|\S)+/g)]
+      : // A trailing Windows separator must not escape padding added by the render buffer.
+        [...text.trimEnd().matchAll(/(?:\\.|\S)+/g)]
           .filter((match) => !/^[\u2500-\u257f]+$/.test(match[0]))
           .map((match) => ({ row: at, start: match.index, end: match.index + match[0].length, text: match[0] })),
   )
