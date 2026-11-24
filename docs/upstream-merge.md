@@ -60,3 +60,38 @@ Markdown `_blockStates` and text-buffer internals. It needs an adapter and muted
 isolated acceptance before replacing the daily build. Do not silently disable
 read-aloud to make the upgrade appear successful. Keep the old build and live
 database unchanged until the gate is cleared.
+
+## Follow-up validation
+
+Blacksmith's authenticated personal-account GitHub Actions dashboard explicitly
+states that personal accounts are unsupported. Its GitHub App was authorized
+for only `moritzWa/opencode` and both cancelled jobs were retried. That does not
+remove the provider's account restriction. A supported organization or provider
+exception is required; runner labels and check requirements have not changed.
+
+Read-aloud's adapter is in companion draft PR
+https://github.com/moritzWa/opencode-read-aloud/pull/43 . Three native renderer
+tests cover real double-click offsets, duplicate answers, tables, Unicode,
+streamed replacement, explicit lavender colors, and unchanged character frames.
+All 36 selected legacy regressions and legacy typechecking pass. The packed
+plugin also activates inside the actual compiled candidate CLI and handles its
+empty-transcript toggle. These checks are silent; they neither synthesize nor
+play speech. The installed plugin is unchanged.
+
+`packages/core/script/validate-upgrade.ts` accepts a directory containing a
+verified SQLite backup and its `before.json` provenance. It builds only Database
+and SessionStore, never a server or SessionExecution. A full server could resume
+the backup's execution claims and execute tools against real paths. The script
+checks Session reads, every historical message page, and recent model contexts
+without starting any model or tool work.
+
+The 33.2 GB consistent backup passed all 14 pending migrations (51 to 65).
+All 3,598 Sessions and 445,487 messages decode through the candidate's real
+SessionStore. Twenty recent model contexts load. Reopened SQLite integrity and
+foreign-key checks pass, historical row counts are unchanged, and a second
+initialization applies no migrations. Reports are retained locally in
+`~/Documents/opencode-upgrade-validation/`; they contain no assertion that a
+candidate server was run against live data. The live source was opened read-only.
+
+The remaining publication blocker is required Blacksmith CI, not these local
+compatibility validations. Both integration and companion plugin PRs stay draft.
