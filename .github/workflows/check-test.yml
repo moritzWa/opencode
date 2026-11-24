@@ -143,12 +143,12 @@ jobs:
         run: |
           # The runners have four vCPUs, and each Bun test process performs its own concurrent work.
           if [ "$AFFECTED" = "true" ]; then
-            GITHUB_ACTIONS=false bun turbo test --affected --concurrency=${{ runner.os == 'Windows' && '1' || '3' }}
+            GITHUB_ACTIONS=false bun turbo test --affected --concurrency=${{ runner.os == 'Windows' && '2' || '3' }}
             exit 0
           fi
           # Avoid competing cold subprocess/native-runtime starts on standard Windows runners.
           # Package selection and per-test timeouts stay unchanged.
-          GITHUB_ACTIONS=false bun turbo test --concurrency=${{ runner.os == 'Windows' && '1' || '3' }}
+          GITHUB_ACTIONS=false bun turbo test --concurrency=${{ runner.os == 'Windows' && '2' || '3' }}
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
