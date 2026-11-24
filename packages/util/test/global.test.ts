@@ -19,6 +19,9 @@ describe("global", () => {
         XDG_CACHE_HOME: directories[1],
         XDG_CONFIG_HOME: directories[2],
         XDG_STATE_HOME: directories[3],
+        // The cache is not part of the import-side-effect assertion. Share it across cold child starts.
+        BUN_RUNTIME_TRANSPILER_CACHE_PATH:
+          process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH ?? path.join(os.tmpdir(), "bun-transpiler-cache"),
         // os.tmpdir() reads TMPDIR on POSIX and TEMP on Windows.
         TMPDIR: directories[4],
         TEMP: directories[4],
@@ -72,6 +75,8 @@ describe("global", () => {
         XDG_CACHE_HOME: directories[1],
         XDG_CONFIG_HOME: directories[2],
         XDG_STATE_HOME: directories[3],
+        BUN_RUNTIME_TRANSPILER_CACHE_PATH:
+          process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH ?? path.join(os.tmpdir(), "bun-transpiler-cache"),
         // os.tmpdir() reads TMPDIR on POSIX and TEMP on Windows.
         TMPDIR: directories[4],
         TEMP: directories[4],

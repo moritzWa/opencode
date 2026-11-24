@@ -109,7 +109,9 @@ test("plain clicks on text naming an existing local path resolve it", async () =
 
 test("plain clicks resolve local paths that wrap across rows", async () => {
   await using root = await tmpdir()
-  const file = path.join(root.path, "polish sentence draft.mp4")
+  const folder = path.join(root.path, "wrapped-path-with-enough-columns")
+  await mkdir(folder)
+  const file = path.join(folder, "polish sentence draft.mp4")
   await Bun.write(file, "x")
   const clicked: (string | undefined)[] = []
   function Transcript() {
@@ -121,8 +123,8 @@ test("plain clicks resolve local paths that wrap across rows", async () => {
           clicked.push(clickedPath(renderer, event, root.path))
         }}
       >
-        <text>{`┃ ${file.replaceAll(" ", "\\ ")} thanks`}</text>
-        <text>{`┃ ${file} thanks`}</text>
+        <text>{`┃ ${file.replaceAll(" ", "\\ ")}`}</text>
+        <text>{`┃ ${file}`}</text>
       </box>
     )
   }
