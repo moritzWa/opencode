@@ -127,6 +127,30 @@ describe("Anthropic Messages route", () => {
     }),
   )
 
+  it.effect("requests progress summaries for current Claude models without overriding explicit display settings", () =>
+    Effect.gen(function* () {
+      const current = AnthropicMessages.route
+        .with({ endpoint: { baseURL: "https://api.anthropic.test/v1/" }, auth: Auth.header("x-api-key", "test") })
+        .model({ id: "claude-sonnet-5.5" })
+      const defaults = yield* compileRequest({ ...request, model: current })
+      expect(defaults.body.thinking).toMatchObject({ type: "adaptive", display: "summarized" })
+      const omitted = yield* compileRequest({
+        ...request,
+        model: current,
+        providerOptions: { thinking: { type: "adaptive", display: "omitted" } },
+      })
+      expect(omitted.body.thinking).toMatchObject({ type: "adaptive", display: "omitted" })
+      const disabled = yield* compileRequest({
+        ...request,
+        model: current,
+        providerOptions: { thinking: { type: "disabled" } },
+      })
+      expect(disabled.body.thinking).toEqual({ type: "disabled" })
+      const older = yield* compileRequest(request)
+      expect(older.body.thinking).toBeUndefined()
+    }),
+  )
+
   it.effect("lowers adaptive thinking settings with effort", () =>
     Effect.gen(function* () {
       const prepared = yield* compileRequest({

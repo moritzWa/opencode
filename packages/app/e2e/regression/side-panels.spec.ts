@@ -166,7 +166,8 @@ test("closing the last New tab closes the side region, and only a New tab lists 
 
   // Closing and reopening the region keeps its one New tab instead of adding another each time.
   for (const _ of [1, 2, 3]) {
-    await toggle.click()
+    // The header toggle hands off to the panel after its opening motion settles.
+    await panel.getByRole("button", { name: "Toggle review", exact: true }).click()
     await expect(toggle).toHaveAttribute("aria-expanded", "false")
     await toggle.click()
     await expect(toggle).toHaveAttribute("aria-expanded", "true")
@@ -327,7 +328,13 @@ test("a session open in a shell tab keeps its side tabs when the layout forgets 
       { id: "ses_background", title: "In the background" },
     ],
     fileList: () => [fileNode(directory, "long.txt")],
-    fileContent: (path) => ({ type: "text", content: path === "long.txt" ? Array.from({ length: 400 }, (_, index) => `line ${index + 1}`).join("\n") : `contents:${path}` }),
+    fileContent: (path) => ({
+      type: "text",
+      content:
+        path === "long.txt"
+          ? Array.from({ length: 400 }, (_, index) => `line ${index + 1}`).join("\n")
+          : `contents:${path}`,
+    }),
     seed: {
       panes: { ses_background: { review: true } },
       storage: {

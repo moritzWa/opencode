@@ -61,7 +61,9 @@ test("keeps the parent title anchored when opening a subagent", async ({ page })
     // Measuring before then can read the detached heading, whose empty bounds put the start at 0.
     const card = page.locator(`a[href="${sessionHref(childID)}"]`)
     await expect(card).toBeVisible()
-    const start = await titleInlineStart(page.locator("[data-session-title]").getByRole("heading", { name: parentTitle }))
+    const start = await titleInlineStart(
+      page.locator("[data-session-title]").getByRole("heading", { name: parentTitle }),
+    )
 
     await card.click()
     await expectSessionTitle(page, taskDescription)
@@ -198,7 +200,8 @@ test("restores the project name after closing review in a nested session", async
 
   await review.click()
   await expect(project).toBeHidden()
-  await review.click()
+  // Close using the settled panel's toggle, not the header copy it replaces during opening.
+  await page.locator("#review-panel").getByRole("button", { name: "Toggle review", exact: true }).click()
   await expect.poll(() => row.evaluate((element) => element.getBoundingClientRect().width)).toBe(width)
   await expect(project).toBeVisible()
   await expect(header.getByRole("heading", { name: "Review repository", exact: true })).toBeVisible()
