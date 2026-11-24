@@ -13,7 +13,8 @@ describe("Core test environment", () => {
     expect(home).toBeDefined()
     if (!home) return
 
-    expect(os.homedir()).toBe(home)
+    // Bun caches os.homedir before preloads. Global and spawned shells use these explicit test roots.
+    expect(process.env.HOME).toBe(home)
     expect(Global.Path.home).toBe(home)
     expect(Global.Path.config).toBe(path.join(home, ".config", "opencode"))
     expect(Global.Path.data).toBe(path.join(home, ".local", "share", "opencode"))

@@ -10,6 +10,7 @@ import { createTestRenderer } from "@opentui/core/testing"
 import { render } from "@opentui/solid"
 import { createRoot, createSignal } from "solid-js"
 import { createMarkdownRenderer } from "../src/plugin/markdown"
+import { waitForHighlightedFrame } from "./fixture/frame"
 
 // Fences must have a visible fallback before highlighting, including languages
 // such as `text` that have no syntax parser. These tests inspect actual cells.
@@ -26,22 +27,21 @@ for (const streaming of [false, true]) {
     ],
   ]) {
     test(`${name} fences remain visible with streaming=${streaming}`, async () => {
-      const output = await createTestRenderer({ width: 80, height: 18, remote: true, useThread: false })
+      const output = await createTestRenderer({ width: 80, height: 18, remote: true })
       await render(() => {
         const renderNode = createMarkdownRenderer(() => [])
         return (
           <markdown
-            syntaxStyle={SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } })}
-            renderNode={renderNode()}
+            syntaxStyle={SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } }, output.renderer.nativeScene)}
+            renderBlock={renderNode()}
             content={content}
             streaming={streaming}
-            internalBlockMode="top-level"
           />
         )
       }, output.renderer)
       try {
         output.renderer.start()
-        await output.waitForFrame((frame) => frame.includes("After"))
+        await waitForHighlightedFrame(output, (frame) => frame.includes('rm -rf "/Volumes/Data/Library/Bluetooth/"*'))
         expect(output.captureCharFrame()).toContain('rm -rf "/Volumes/Data/Library/Bluetooth/"*')
       } finally {
         output.renderer.destroy()
@@ -51,30 +51,24 @@ for (const streaming of [false, true]) {
 }
 
 test("list fences stay visible through streamed edits, restyling, and completion", async () => {
-  const output = await createTestRenderer({ width: 80, height: 24, remote: true, useThread: false })
+  const output = await createTestRenderer({ width: 80, height: 24, remote: true })
   const [content, setContent] = createSignal("1. Paste `this`:\n\n   ```text\n   first")
   const [streaming, setStreaming] = createSignal(true)
-  const [style, setStyle] = createSignal(SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } }))
+  const [style, setStyle] = createSignal(
+    SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } }, output.renderer.nativeScene),
+  )
   await render(() => {
     const renderNode = createMarkdownRenderer(() => [])
-    return (
-      <markdown
-        syntaxStyle={style()}
-        renderNode={renderNode()}
-        content={content()}
-        streaming={streaming()}
-        internalBlockMode="top-level"
-      />
-    )
+    return <markdown syntaxStyle={style()} renderBlock={renderNode()} content={content()} streaming={streaming()} />
   }, output.renderer)
   try {
     output.renderer.start()
-    await output.renderOnce()
+    await waitForHighlightedFrame(output, (frame) => frame.includes("first"))
     expect(output.captureCharFrame()).toContain("first")
     setContent("1. Paste `this`:\n\n   ```text\n   first second\n   ```\n\n2. After")
-    await output.renderOnce()
+    await waitForHighlightedFrame(output, (frame) => frame.includes("first second"))
     expect(output.captureCharFrame()).toContain("first second")
-    setStyle(SyntaxStyle.fromStyles({ default: { fg: "#aabbff" } }))
+    setStyle(SyntaxStyle.fromStyles({ default: { fg: "#aabbff" } }, output.renderer.nativeScene))
     await output.renderOnce()
     expect(output.captureCharFrame()).toContain("first second")
     setStreaming(false)
@@ -85,7 +79,7 @@ test("list fences stay visible through streamed edits, restyling, and completion
     for (const language of ["", "unknown-language", "bash", "javascript"]) {
       setStreaming(true)
       setContent(`- Outer\n  - Inner\n\n    \`\`\`${language}\n    visible_code()\n    \`\`\`\n\n- After`)
-      await output.renderOnce()
+      await waitForHighlightedFrame(output, (frame) => frame.includes("visible_code()"))
       expect(output.captureCharFrame()).toContain("visible_code()")
     }
   } finally {
@@ -94,7 +88,7 @@ test("list fences stay visible through streamed edits, restyling, and completion
 })
 
 test("unrelated plugin toggles preserve mounted Markdown blocks", async () => {
-  const output = await createTestRenderer({ width: 80, height: 12, remote: true, useThread: false })
+  const output = await createTestRenderer({ width: 80, height: 12, remote: true })
   const handler: MarkdownCodeBlockRenderer = () =>
     new TextRenderable(output.renderer, { content: "Custom fence", height: 1 })
   const [sources, setSources] = createSignal<ReadonlyArray<Readonly<Record<string, MarkdownCodeBlockRenderer>>>>([
@@ -102,14 +96,13 @@ test("unrelated plugin toggles preserve mounted Markdown blocks", async () => {
     {},
   ])
   await render(() => {
-    const renderNode = createMarkdownRenderer(sources)
+    const renderBlock = createMarkdownRenderer(sources)
     return (
       <markdown
-        syntaxStyle={SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } })}
-        renderNode={renderNode()}
+        syntaxStyle={SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } }, output.renderer.nativeScene)}
+        renderBlock={renderBlock()}
         content={"A plain paragraph.\n\n```example\nFence content\n```"}
         streaming={false}
-        internalBlockMode="top-level"
       />
     )
   }, output.renderer)
@@ -143,18 +136,18 @@ test("effective mappings preserve identity through reordered and shadowed contri
         { example: first },
         { example: second, other: first },
       ])
-      const renderNode = createMarkdownRenderer(sources)
-      const initial = renderNode()
+      const renderBlock = createMarkdownRenderer(sources)
+      const initial = renderBlock()
 
       setSources([{ other: first, example: second }])
-      expect(renderNode()).toBe(initial)
+      expect(renderBlock()).toBe(initial)
       setSources([{ example: first }, { other: first, example: second }])
-      expect(renderNode()).toBe(initial)
+      expect(renderBlock()).toBe(initial)
 
       setSources([{ example: first, other: first }])
-      expect(renderNode()).not.toBe(initial)
+      expect(renderBlock()).not.toBe(initial)
       setSources([])
-      expect(renderNode()).toBeFunction()
+      expect(renderBlock()).toBeUndefined()
     } finally {
       dispose()
     }
@@ -162,16 +155,15 @@ test("effective mappings preserve identity through reordered and shadowed contri
 })
 
 test("unordered lists use filled bullets while numbered lists retain their numbers", async () => {
-  const output = await createTestRenderer({ width: 80, height: 12, remote: true, useThread: false })
+  const output = await createTestRenderer({ width: 80, height: 12, remote: true })
   await render(() => {
     const renderNode = createMarkdownRenderer(() => [])
     return (
       <markdown
-        syntaxStyle={SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } })}
-        renderNode={renderNode()}
+        syntaxStyle={SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } }, output.renderer.nativeScene)}
+        renderBlock={renderNode()}
         content={"- alpha\n- beta\n\n1. one\n2. two"}
         streaming={false}
-        internalBlockMode="top-level"
       />
     )
   }, output.renderer)
@@ -188,7 +180,7 @@ test("unordered lists use filled bullets while numbered lists retain their numbe
 })
 
 test("changing and removing a Markdown handler refreshes existing messages", async () => {
-  const output = await createTestRenderer({ width: 80, height: 12, remote: true, useThread: false })
+  const output = await createTestRenderer({ width: 80, height: 12, remote: true })
   const first: MarkdownCodeBlockRenderer = () =>
     new TextRenderable(output.renderer, { content: "First renderer", height: 1 })
   const second: MarkdownCodeBlockRenderer = () =>
@@ -197,14 +189,13 @@ test("changing and removing a Markdown handler refreshes existing messages", asy
     { example: first },
   ])
   await render(() => {
-    const renderNode = createMarkdownRenderer(sources)
+    const renderBlock = createMarkdownRenderer(sources)
     return (
       <markdown
-        syntaxStyle={SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } })}
-        renderNode={renderNode()}
+        syntaxStyle={SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } }, output.renderer.nativeScene)}
+        renderBlock={renderBlock()}
         content={"```example\nFence content\n```"}
         streaming={false}
-        internalBlockMode="top-level"
       />
     )
   }, output.renderer)

@@ -13,6 +13,44 @@ const voice = makeLocationNode({
   layer: Layer.succeed(
     Voice.Service,
     Voice.Service.of({
+      models: () =>
+        Effect.succeed({
+          models: [
+            {
+              model: "gpt-live-1",
+              name: "GPT-Live 1",
+              engine: "openai-live",
+              provider: "openai",
+              transports: ["webrtc"],
+              available: true,
+            },
+            {
+              model: "gpt-realtime-2.1",
+              name: "GPT-Realtime-2.1",
+              engine: "openai-realtime",
+              provider: "openai",
+              transports: ["webrtc", "websocket"],
+              available: true,
+            },
+            {
+              model: "grok-voice-3.0",
+              name: "Grok Voice 3.0",
+              engine: "xai-realtime",
+              provider: "xai",
+              transports: ["websocket"],
+              available: false,
+            },
+            {
+              model: "gemini-3.8-live",
+              name: "Gemini 3.8 Live",
+              engine: "gemini-live",
+              provider: "google",
+              transports: ["websocket"],
+              available: false,
+            },
+          ],
+          default: "gpt-live-1",
+        }),
       session: (input) => {
         if (input.model === "invalid")
           return Effect.fail(new Voice.InvalidRequestError({ message: "Unsupported voice model" }))
@@ -34,7 +72,7 @@ const voice = makeLocationNode({
   deps: [],
 })
 
-it.live("routes POST /api/experimental/voice/session and maps errors", () =>
+it.live("routes experimental voice models and session endpoints", () =>
   Effect.gen(function* () {
     const tmp = yield* Effect.acquireDisposable(Effect.promise(() => tmpdir("opencode-voice-endpoint-")))
     const global = path.join(tmp.path, "global")
@@ -48,6 +86,50 @@ it.live("routes POST /api/experimental/voice/session and maps errors", () =>
       },
       { overrides: [Voice.node.replace(voice)] },
     )
+    const modelsRes = yield* Effect.promise(() =>
+      handler(new Request("http://opencode.local/api/experimental/voice/models")),
+    )
+    expect(modelsRes.status).toBe(200)
+    expect(yield* Effect.promise(() => modelsRes.json())).toEqual({
+      data: {
+        models: [
+          {
+            model: "gpt-live-1",
+            name: "GPT-Live 1",
+            engine: "openai-live",
+            provider: "openai",
+            transports: ["webrtc"],
+            available: true,
+          },
+          {
+            model: "gpt-realtime-2.1",
+            name: "GPT-Realtime-2.1",
+            engine: "openai-realtime",
+            provider: "openai",
+            transports: ["webrtc", "websocket"],
+            available: true,
+          },
+          {
+            model: "grok-voice-3.0",
+            name: "Grok Voice 3.0",
+            engine: "xai-realtime",
+            provider: "xai",
+            transports: ["websocket"],
+            available: false,
+          },
+          {
+            model: "gemini-3.8-live",
+            name: "Gemini 3.8 Live",
+            engine: "gemini-live",
+            provider: "google",
+            transports: ["websocket"],
+            available: false,
+          },
+        ],
+        default: "gpt-live-1",
+      },
+    })
+
     const post = (body: unknown) =>
       Effect.promise(() =>
         handler(

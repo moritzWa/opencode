@@ -13,6 +13,7 @@ import { Session } from "@opencode/core/session"
 import { SessionEvent } from "@opencode/core/session/event"
 import { SessionMessage } from "@opencode/core/session/message"
 import { SessionRunnerModel } from "@opencode/core/session/runner/model"
+import { Model } from "@opencode/core/model"
 import type { SessionDomain } from "@opencode/plugin/promise/session"
 import { Global } from "@opencode/util/global"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
@@ -111,7 +112,11 @@ it.live("public Promise generation unwraps objects and aborts a pending provider
           }),
         ),
         SessionRunnerModel.node.replace(
-          Layer.succeed(SessionRunnerModel.Service, { resolve: () => Effect.succeed(model) }),
+          Layer.succeed(SessionRunnerModel.Service, {
+            select: () =>
+              Effect.succeed({ info: Model.Info.default(model.ref.providerID, model.ref.id), variant: undefined }),
+            resolve: () => Effect.succeed(model),
+          }),
         ),
       ]).pipe(Layer.provide(HttpServer.layerServices)),
     )

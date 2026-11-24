@@ -2,6 +2,7 @@ import { Auth, LLMClient, RequestExecutor } from "@opencode/ai/route"
 import { OpenAIChat } from "@opencode/ai/protocols/openai-chat"
 import type { LanguageModel } from "@opencode/ai"
 import { Model } from "@opencode/core/model"
+import { Provider } from "@opencode/core/provider"
 import { Database } from "@opencode/core/database/database"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { LayerNodePlatform } from "@opencode/core/effect/app-node-platform"
@@ -9,6 +10,8 @@ import { LayerNode } from "@opencode/util/effect/layer-node"
 import { Bus } from "@opencode/core/bus"
 import { Agent } from "@opencode/core/agent"
 import { Config } from "@opencode/core/config"
+import { Flag } from "@opencode/core/flag"
+import { FileWrite } from "@opencode/core/file-write"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Session } from "@opencode/core/session"
 import { Snapshot } from "@opencode/core/snapshot"
@@ -51,6 +54,14 @@ export function recoveryRunnerLayer(
 ) {
   const client = LLMClient.layer.pipe(Layer.provide(RequestExecutor.layer), Layer.provide(FetchHttpClient.layer))
   const models = Layer.mock(SessionRunnerModel.Service)({
+    select: (session) =>
+      Effect.succeed({
+        info: Model.Info.default(
+          session.model?.providerID ?? Provider.ID.make("openai"),
+          session.model?.id ?? Model.ID.make("claude-subscription"),
+        ),
+        variant: session.model?.variant,
+      }),
     resolve: (session) =>
       Effect.succeed(
         SessionRunnerModel.resolved(
@@ -71,6 +82,7 @@ export function recoveryRunnerLayer(
   const discovery = Layer.mock(InstructionDiscovery.Service, {
     project: true,
     global: true,
+    claude: true,
     load: () => Effect.succeed(Instructions.empty),
   })
   const skills = Layer.mock(SkillInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
@@ -120,6 +132,9 @@ export function recoveryRunnerLayer(
   ).pipe(Layer.provide(runner), Layer.orDie)
   return AppNodeBuilder.build(
     LayerNode.group([
+      Config.node,
+      Flag.node,
+      FileWrite.node,
       Database.node,
       Bus.node,
       SessionProjector.node,

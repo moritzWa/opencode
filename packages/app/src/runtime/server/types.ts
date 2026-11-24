@@ -1,3 +1,4 @@
+/* oxlint-disable anti-slop/no-unsafe-dictionary-type -- option and settings bags are passed along as the server sends them */
 import type { ProjectListOutput, WorktreeDirectory } from "@opencode/client/promise"
 
 export type Project = Omit<ProjectListOutput[number], "canonical"> & {
@@ -11,30 +12,6 @@ export type FileNode = {
   absolute: string
   type: "file" | "directory"
   ignored: boolean
-}
-
-export type FileContent = {
-  type: "text" | "binary"
-  content: string
-  diff?: string
-  patch?: {
-    oldFileName: string
-    newFileName: string
-    oldHeader?: string
-    newHeader?: string
-    hunks: Array<{
-      oldStart: number
-      oldLines: number
-      newStart: number
-      newLines: number
-      lines: string[]
-    }>
-    index?: string
-  }
-  encoding?: "base64"
-  mimeType?: string
-  /** On-disk size when the bytes themselves are not retained. */
-  size?: number
 }
 
 export type Path = {
@@ -66,7 +43,7 @@ export type Agent = {
   steps?: number
 }
 
-export type Model = {
+type Model = {
   id: string
   providerID: string
   api: {
@@ -126,6 +103,8 @@ export type Model = {
   headers: Record<string, string>
   release_date: string
   variants?: Record<string, Record<string, unknown>>
+  /** Set on a model that is another model (`base`) served faster or slower, such as "gpt-5.5-fast". */
+  speed?: { base: string; id: string; faster: boolean }
 }
 
 export type Provider = {

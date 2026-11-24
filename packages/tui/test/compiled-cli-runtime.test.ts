@@ -36,6 +36,41 @@ test.skipIf(!binary || process.platform === "win32")(
 )
 
 const profile = process.env.OPENCODE_COMPILED_PROFILE_PACKAGES
+const speech = process.env.OPENCODE_COMPILED_SPEECH_PACKAGE
+test.skipIf(!binary || !speech || process.platform === "win32")(
+  "production compiled CLI activates the packed native-renderer speech adapter without audio",
+  async () => {
+    await using root = await tmpdir()
+    const consumer = path.join(root.path, "speech-profile")
+    await mkdir(consumer)
+    await Bun.write(
+      path.join(consumer, "package.json"),
+      JSON.stringify({
+        private: true,
+        type: "module",
+        dependencies: {
+          "opencode-read-aloud": `file:${speech}`,
+          "@opentui/core": "0.9.4",
+          "@opentui/solid": "0.9.4",
+          "solid-js": "1.9.17",
+        },
+      }),
+    )
+    await install(consumer, "0.9.4")
+    const wrapper = path.join(consumer, "speech")
+    await mkdir(wrapper)
+    await Bun.write(path.join(wrapper, "tui.js"), 'export { default } from "opencode-read-aloud/v2"\n')
+    // An empty fixture transcript makes toggle show its toast, never synthesize or play speech.
+    await runCLI(
+      consumer,
+      [{ package: wrapper, options: { placement: "footer" } }],
+      ["ctrl+p commands"],
+      ["No answer to read yet"],
+    )
+  },
+  60_000,
+)
+
 test.skipIf(!binary || !profile || process.platform === "win32")(
   "production compiled CLI activates exact packed speech parity and todo wrappers with physical peers",
   async () => {
@@ -107,7 +142,7 @@ async function runCLI(
     return undefined
   }, events)
   const server = Bun.serve({ port: 0, idleTimeout: 0, fetch: (request) => calls.fetch(request) })
-  const output = await createTestRenderer({ width: 140, height: 38, useThread: false, remote: true })
+  const output = await createTestRenderer({ width: 140, height: 38, remote: true })
   const child = spawn(binary ?? "", ["--server", server.url.toString(), "--session", session.id], {
     name: "xterm-256color",
     cols: 140,

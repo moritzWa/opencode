@@ -44,7 +44,7 @@ export function Link(props: LinkProps) {
  * link resolves the whole link. Modified clicks are left to the terminal's own hyperlink handling.
  */
 export function clickedLink(renderer: CliRenderer, event: MouseEvent) {
-  if (!isPlainClick(renderer, event)) return
+  if (!plainClick(renderer, event)) return
   return renderer.getLinkAt(event.x, event.y) ?? undefined
 }
 
@@ -53,7 +53,7 @@ export function clickedLink(renderer: CliRenderer, event: MouseEvent) {
  * `~/Desktop/report.xlsx` or `/Users/me/My\ Files/a.png`. Text that does not name something on disk is not a link.
  */
 export function clickedPath(renderer: CliRenderer, event: MouseEvent, directory: string) {
-  if (!isPlainClick(renderer, event) || event.x < 0 || event.y < 0) return
+  if (!plainClick(renderer, event) || event.x < 0 || event.y < 0) return
   const screen = screenWords(renderer, event)
   if (!screen) return
   const { words, inside, after, gap } = screen
@@ -61,7 +61,7 @@ export function clickedPath(renderer: CliRenderer, event: MouseEvent, directory:
   const from = inside >= 0 ? inside : after - 1
   const to = inside >= 0 ? inside : after
   const matches = words.flatMap((first, at) => {
-    if (at > from || !/^[`"'(\[<]*(?:~|\.{0,2})?\//.test(first.text)) return []
+    if (at > from || !/^[`"'(\[<]*(?:(?:~|\.{0,2})?\/|[a-z]:[\\/]|\\\\)/i.test(first.text)) return []
     // Unescaped spaces are common in pasted paths, so try each longer run of words and keep the longest match. Across a
     // wrap the separating space is dropped, while a word wrapped mid-token has none.
     let runs = [first.text]
@@ -87,7 +87,7 @@ export function clickedPath(renderer: CliRenderer, event: MouseEvent, directory:
  * returned as `https://` URLs.
  */
 export function clickedUrl(renderer: CliRenderer, event: MouseEvent) {
-  if (!isPlainClick(renderer, event) || event.x < 0 || event.y < 0) return
+  if (!plainClick(renderer, event) || event.x < 0 || event.y < 0) return
   const screen = screenWords(renderer, event)
   if (!screen || screen.inside < 0) return
   const { words, inside } = screen
@@ -178,9 +178,10 @@ function screenWords(renderer: CliRenderer, event: MouseEvent) {
     index += char.length
   }
   const words = rows.flatMap((text, at) =>
-    Math.abs(at - event.y) > 3
+    Math.abs(at - event.y) > 7
       ? []
-      : [...text.matchAll(/(?:\\.|\S)+/g)]
+      : // A trailing Windows separator must not escape padding added by the render buffer.
+        [...text.trimEnd().matchAll(/(?:\\.|\S)+/g)]
           .filter((match) => !/^[\u2500-\u257f]+$/.test(match[0]))
           .map((match) => ({ row: at, start: match.index, end: match.index + match[0].length, text: match[0] })),
   )
@@ -190,17 +191,18 @@ function screenWords(renderer: CliRenderer, event: MouseEvent) {
   return { words, inside, after, gap }
 }
 
-function isPlainClick(renderer: CliRenderer, event: MouseEvent) {
+export function plainClick(renderer: CliRenderer, event: MouseEvent) {
   if (!event.isDragging || event.modifiers.ctrl || event.modifiers.alt || event.modifiers.shift) return false
   const selection = renderer.getSelection()
   return !!selection?.isStart && selection.behavior === "cell"
 }
 
 function existingPath(text: string, directory: string) {
-  const cleaned = text
-    .replace(/^[`"'(\[<]+/, "")
-    .replace(/[`"')\]>.,;:!?]+$/, "")
-    .replace(/\\(.)/g, "$1")
+  const unquoted = text.replace(/^[`"'(\[<]+/, "").replace(/[`"')\]>.,;:!?]+$/, "")
+  // Backslashes in drive/UNC paths are separators, not POSIX shell escapes.
+  const cleaned = /^(?:[a-z]:[\\/]|\\\\)/i.test(unquoted)
+    ? unquoted.replace(/\\ /g, " ")
+    : unquoted.replace(/\\(.)/g, "$1")
   const value = cleaned.startsWith("file://") && URL.canParse(cleaned) ? fileURLToPath(cleaned) : cleaned
   if (!value) return
   const candidates = path.isAbsolute(value)

@@ -104,7 +104,6 @@ it.live(
       yield* bus.publish(SessionEvent.Compaction.Started, {
         sessionID: session.id,
         reason: "manual",
-        recent: "",
         inputID: compacted,
       })
       yield* bus.publish(SessionEvent.Compaction.Ended, {
@@ -112,7 +111,6 @@ it.live(
         reason: "manual",
         model,
         text: "Checkpoint summary",
-        recent: "",
         ...usage,
       })
       yield* user(newer, "User message after compaction")

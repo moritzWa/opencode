@@ -2,10 +2,16 @@ import { describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { isolatedEnv } from "./fixture/environment"
+import { tmpdir } from "./fixture/tmpdir"
 
 describe("debug paths command", () => {
   test("is included in troubleshooting help", async () => {
-    const [debug, paths] = await Promise.all([cli(["debug", "--help"]), cli(["debug", "paths", "--help"])])
+    await using root = await tmpdir()
+    const [debug, paths] = await Promise.all([
+      cli(["debug", "--help"], root.path),
+      cli(["debug", "paths", "--help"], root.path),
+    ])
 
     expect(debug.exitCode).toBe(0)
     expect(debug.stdout).toContain("paths")
@@ -18,7 +24,7 @@ describe("debug paths command", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-debug-paths-"))
 
     try {
-      const result = await cli(["debug", "paths"], {
+      const result = await cli(["debug", "paths"], root, {
         XDG_DATA_HOME: path.join(root, "data"),
         XDG_CONFIG_HOME: path.join(root, "config"),
         XDG_CACHE_HOME: path.join(root, "cache"),
@@ -33,7 +39,8 @@ describe("debug paths command", () => {
 
       expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" })
       expect(paths).toMatchObject({
-        home: os.homedir(),
+        home: root,
+        db: path.join(root, "opencode.db"),
         data: path.join(root, "data", "opencode"),
         config: path.join(root, "config", "opencode"),
         cache: path.join(root, "cache", "opencode"),
@@ -50,10 +57,10 @@ describe("debug paths command", () => {
   })
 })
 
-async function cli(args: string[], env?: Record<string, string>) {
+async function cli(args: string[], root: string, env?: Record<string, string>) {
   const child = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "../src/index.ts"), ...args], {
     cwd: path.join(import.meta.dir, ".."),
-    env: { ...process.env, ...env },
+    env: isolatedEnv(root, { ...env, OPENCODE_CONFIG_DIR: undefined }),
     stdout: "pipe",
     stderr: "pipe",
   })

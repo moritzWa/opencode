@@ -37,12 +37,7 @@ function Blocks(props: { themed: boolean }) {
         <text fg={theme.text.base}>user message text here</text>
       </box>
       <box paddingLeft={3}>
-        <markdown
-          syntaxStyle={themes.currentSyntax()}
-          content={"- assistant bullet text here"}
-          streaming={false}
-          internalBlockMode="top-level"
-        />
+        <markdown syntaxStyle={themes.currentSyntax()} content={"- assistant bullet text here"} streaming={false} />
       </box>
     </box>
   )
@@ -94,7 +89,12 @@ function Input(props: { themed: boolean }) {
   return (
     <box width="100%" height="100%" backgroundColor={theme.background.base}>
       <box paddingLeft={2} backgroundColor={theme.background.raised.base}>
-        <textarea initialValue="prompt input text here" textColor={theme.text.base} focusedTextColor={theme.text.base} focused />
+        <textarea
+          initialValue="prompt input text here"
+          textColor={theme.text.base}
+          focusedTextColor={theme.text.base}
+          focused
+        />
       </box>
     </box>
   )
@@ -129,11 +129,14 @@ async function selectedInput(mode: "light" | "dark", themed: boolean) {
   }
 }
 
-test.each(["light", "dark"] as const)("selected prompt input text is a readable tint, not a block (%s)", async (mode) => {
-  const input = await selectedInput(mode, true)
-  expect(contrast(input.selected.fg, input.selected.bg)).toBeGreaterThan(4.5)
-  expect(contrast(input.selected.bg, input.surface)).toBeLessThan(3)
-})
+test.each(["light", "dark"] as const)(
+  "selected prompt input text is a readable tint, not a block (%s)",
+  async (mode) => {
+    const input = await selectedInput(mode, true)
+    expect(contrast(input.selected.fg, input.selected.bg)).toBeGreaterThan(4.5)
+    expect(contrast(input.selected.bg, input.surface)).toBeLessThan(3)
+  },
+)
 
 test("the unthemed prompt input selection is a solid block on the light theme", async () => {
   const input = await selectedInput("light", false)

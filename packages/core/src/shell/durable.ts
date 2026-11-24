@@ -223,12 +223,17 @@ export const wait = (entry: Entry, verify: boolean) =>
       const present = yield* Effect.promise(() => exists(files(entry.file).record))
       if (!present) return { _tag: "removed" } as const
       const exit = yield* Effect.promise(() => readExit(entry.file))
-      if (exit) return outcome(exit)
+      // Cancellation may remove the record while an exit status or process probe is in flight.
+      if (exit)
+        return (yield* Effect.promise(() => exists(files(entry.file).record)))
+          ? outcome(exit)
+          : ({ _tag: "removed" } as const)
       const running = yield* Effect.promise(() => alive(entry.pid, first ? entry.identity : undefined))
       first = false
       if (!running) {
         // The wrapper may have written its status between the two checks.
         const late = yield* Effect.promise(() => readExit(entry.file))
+        if (!(yield* Effect.promise(() => exists(files(entry.file).record)))) return { _tag: "removed" } as const
         return late ? outcome(late) : ({ _tag: "lost", at: Date.now() } as const)
       }
       yield* Effect.sleep(POLL)

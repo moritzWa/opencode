@@ -1,6 +1,6 @@
 export * as SessionWatchdog from "./watchdog.js"
 
-import { AIError, TimeoutError, TransportError } from "@opencode/ai"
+import { AIError, TimeoutError, TransportError } from "@opencode/ai/effect"
 import { Clock, Effect } from "effect"
 
 export interface Activity {

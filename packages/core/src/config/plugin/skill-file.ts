@@ -1,6 +1,7 @@
 export * as SkillFile from "./skill-file.js"
 
 import path from "path"
+import { isRecord } from "@opencode/util/record"
 import { Result, Schema, SchemaIssue, SchemaParser } from "effect"
 import { ConfigMarkdown } from "../markdown.js"
 import { AbsolutePath } from "../../schema.js"
@@ -38,10 +39,8 @@ export function diagnostic(filepath: string, parsed: ParseResult): Skill.Diagnos
 const formatIssue = SchemaIssue.makeFormatterDefault()
 
 const metadataBoolean = (metadata: unknown, key: string) => {
-  if (metadata === undefined || metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
-    return undefined
-  }
-  return booleanValue((metadata as Record<string, unknown>)[key])
+  if (!isRecord(metadata)) return undefined
+  return booleanValue(metadata[key])
 }
 
 const booleanValue = (value: unknown) => {

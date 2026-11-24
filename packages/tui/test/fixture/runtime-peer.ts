@@ -94,7 +94,7 @@ export default { id: "compiled-runtime-peer", tui, async setup(context) { const 
   }
 }
 
-export async function install(directory: string) {
+export async function install(directory: string, version = "0.6.6") {
   const child = Bun.spawn([process.execPath, "install", "--ignore-scripts", "--linker", "hoisted"], {
     cwd: directory,
     stdout: "pipe",
@@ -103,7 +103,7 @@ export async function install(directory: string) {
   const result = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
   expect({ code: result[0], output: result[0] ? result.slice(1) : [] }).toEqual({ code: 0, output: [] })
   expect(await Bun.file(path.join(directory, "node_modules/@opentui/core/package.json")).json()).toMatchObject({
-    version: "0.6.6",
+    version,
   })
   for (const name of ["@opentui/core", "@opentui/solid", "solid-js"]) {
     expect((await lstat(path.join(directory, "node_modules", name))).isSymbolicLink()).toBe(false)

@@ -1,0 +1,26 @@
+diff --git a/index.bun.js b/index.bun.js
+index ddf74b8ee76718276147bc74bd0a38e0cfb0756f..58507975e346ed764a3e0fea6218f50cddf75e42 100644
+--- a/index.bun.js
++++ b/index.bun.js
+@@ -11559,7 +11559,7 @@ class MarkdownRenderable extends Renderable2 {
+       const flags = this._doc.blocks[item].flags;
+       const checked = (flags & nativeConstants.OT_MD_BLOCK_CHECKED) !== 0;
+       const task = (flags & nativeConstants.OT_MD_BLOCK_TASK) === 0 ? "" : this._conceal ? checked ? " \u2611" : " \u2610" : checked ? " [x]" : " [ ]";
+-      const label = (ordered ? `${block.number + shown.ordinal}.`.padStart(width) : "-") + task + " ";
++      const label = (ordered ? `${block.number + shown.ordinal}.`.padStart(width) : "\u25cf") + task + " ";
+       const chunk = {
+         __isChunk: true,
+         text: label,
+diff --git a/index.node.js b/index.node.js
+index ea1f36e09ec7a94dd90b1e72bb61fd17d465b1e8..69a7af0129ad6d803b41aefc1706380d3f8437c5 100644
+--- a/index.node.js
++++ b/index.node.js
+@@ -11558,7 +11558,7 @@ class MarkdownRenderable extends Renderable2 {
+       const flags = this._doc.blocks[item].flags;
+       const checked = (flags & nativeConstants.OT_MD_BLOCK_CHECKED) !== 0;
+       const task = (flags & nativeConstants.OT_MD_BLOCK_TASK) === 0 ? "" : this._conceal ? checked ? " ☑" : " ☐" : checked ? " [x]" : " [ ]";
+-      const label = (ordered ? `${block.number + shown.ordinal}.`.padStart(width) : "-") + task + " ";
++      const label = (ordered ? `${block.number + shown.ordinal}.`.padStart(width) : "\u25cf") + task + " ";
+       const chunk = {
+         __isChunk: true,
+         text: label,

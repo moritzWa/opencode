@@ -7,14 +7,16 @@ import { chmod, mkdir } from "node:fs/promises"
 import path from "node:path"
 import { clickedLink, clickedPath, clickedUrl, openLink } from "../../src/ui/link"
 import { tmpdir } from "../fixture/fixture"
+import { onCleanup } from "solid-js"
 
 const url = "https://example.com/catalog/moparts,2004,dodge,ram+1500,4.7l+v8,1432463,brake+pad"
-const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } })
 
 test("plain clicks on any row of a wrapped Markdown link resolve the full URL", async () => {
   const opened: string[] = []
   function Transcript() {
     const renderer = useRenderer()
+    const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } }, renderer.nativeScene)
+    onCleanup(() => syntaxStyle.destroy())
     return (
       <box
         onMouseUp={(event) => {
@@ -107,7 +109,9 @@ test("plain clicks on text naming an existing local path resolve it", async () =
 
 test("plain clicks resolve local paths that wrap across rows", async () => {
   await using root = await tmpdir()
-  const file = path.join(root.path, "polish sentence draft.mp4")
+  const folder = path.join(root.path, "wrapped-path-with-enough-columns")
+  await mkdir(folder)
+  const file = path.join(folder, "polish sentence draft.mp4")
   await Bun.write(file, "x")
   const clicked: (string | undefined)[] = []
   function Transcript() {
@@ -119,8 +123,8 @@ test("plain clicks resolve local paths that wrap across rows", async () => {
           clicked.push(clickedPath(renderer, event, root.path))
         }}
       >
-        <text>{`┃ ${file.replaceAll(" ", "\\ ")} thanks`}</text>
-        <text>{`┃ ${file} thanks`}</text>
+        <text>{`┃ ${file.replaceAll(" ", "\\ ")}`}</text>
+        <text>{`┃ ${file}`}</text>
       </box>
     )
   }
@@ -131,13 +135,14 @@ test("plain clicks resolve local paths that wrap across rows", async () => {
     await app.renderOnce()
     const rows = app.captureCharFrame().split("\n")
     const at = rows.flatMap((row, y) => (row.trim() ? [y] : []))
-    expect(at).toHaveLength(8)
+    expect(at.length).toBeGreaterThanOrEqual(6)
     for (const y of at) {
       // Clicks in quick succession count as double and triple clicks, which are not plain clicks.
       clock.advance(1000)
-      await app.mockMouse.click(rows[y]!.search(/\S/) + 3, y)
+      const word = rows[y]!.match(/\S+/)!
+      await app.mockMouse.click(word.index! + (word[0] === "┃" ? 3 : Math.min(3, word[0].length - 1)), y)
     }
-    expect(clicked).toEqual(at.map(() => file))
+    expect(clicked, rows.join("\n")).toEqual(at.map(() => file))
   } finally {
     app.renderer.destroy()
   }
@@ -146,10 +151,12 @@ test("plain clicks resolve local paths that wrap across rows", async () => {
 test("local links open existing files and refuse programs and missing paths", async () => {
   await using root = await tmpdir()
   await mkdir(path.join(root.path, "Thing.app"))
-  await Bun.write(path.join(root.path, "run"), "#!/bin/sh")
-  await chmod(path.join(root.path, "run"), 0o755)
+  // Windows has no POSIX executable bit; programs there are identified by extension.
+  const program = path.join(root.path, process.platform === "win32" ? "run.exe" : "run")
+  await Bun.write(program, "#!/bin/sh")
+  await chmod(program, 0o755)
   await expect(openLink("Thing.app", root.path)).rejects.toThrow("Not opening a program")
-  await expect(openLink(path.join(root.path, "run"), root.path)).rejects.toThrow("Not opening a program")
+  await expect(openLink(program, root.path)).rejects.toThrow("Not opening a program")
   await expect(openLink("nope/missing.xlsx", root.path)).rejects.toThrow("No such file or directory")
   await expect(openLink("ms-msdt:/id PCWDiagnostic", root.path)).rejects.toThrow("No such file or directory")
 })

@@ -5,7 +5,7 @@ import { Config } from "@opencode/core/config"
 import { Skill } from "@opencode/core/skill"
 import { Document, Info } from "@opencode/schema/config"
 import { Global } from "@opencode/util/global"
-import { Effect, Schema } from "effect"
+import { Effect, Schema, Schedule } from "effect"
 import { tempGlobalLayer } from "../../core/test/fixture/global"
 import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
@@ -55,8 +55,11 @@ it.live("reports canonical location-scoped discovery diagnostics without changin
         expect(response.status).toBe(200)
         return response.json()
       })
-    const report = Schema.decodeUnknownSync(Schema.Struct({ data: Schema.Array(Skill.Diagnostic) }))(
-      yield* get("/diagnostics"),
+    const report = yield* get("/diagnostics").pipe(
+      Effect.map(Schema.decodeUnknownSync(Schema.Struct({ data: Schema.Array(Skill.Diagnostic) }))),
+      // Plugin discovery is asynchronous; the HTTP handler deliberately never waits for activation.
+      Effect.repeat({ while: (report) => report.data.length < sources.length, schedule: Schedule.spaced("20 millis") }),
+      Effect.timeout("3 seconds"),
     )
     expect(report.data).toEqual(
       expect.arrayContaining([

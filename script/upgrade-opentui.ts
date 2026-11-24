@@ -42,24 +42,24 @@ const files = (await Array.fromAsync(new Bun.Glob("**/package.json").scan({ cwd:
   (file) => !file.split("/").some((part) => skip.has(part)),
 )
 
-const setVersion = (cur: string, kind: "dep" | "peer") => {
+const setVersion = (cur: string) => {
   if (cur === "catalog:" || cur.startsWith("workspace:")) return cur
   if (snapshot) return ver
-  if (kind === "peer") return `>=${ver}`
   if (cur.startsWith(">=")) return `>=${ver}`
   if (cur.startsWith("^")) return `^${ver}`
   if (cur.startsWith("~")) return `~${ver}`
   return ver
 }
 
-const editDeps = (obj: unknown, kind: "dep" | "peer") => {
+// Peer ranges are left alone: @opencode/plugin's @opentui peers are public API, raised only when a type it exports changes.
+const editDeps = (obj: unknown) => {
   if (!obj || typeof obj !== "object") return false
   const map = obj as Record<string, unknown>
   return keys
     .map((key) => {
       const cur = map[key]
       if (typeof cur !== "string") return false
-      const next = setVersion(cur, kind)
+      const next = setVersion(cur)
       if (next === cur) return false
       map[key] = next
       return true
@@ -104,9 +104,8 @@ const out = (
       const hit = [
         editCatalog(json.workspaces?.catalog),
         editOverrides(json.overrides),
-        editDeps(json.dependencies, "dep"),
-        editDeps(json.devDependencies, "dep"),
-        editDeps(json.peerDependencies, "peer"),
+        editDeps(json.dependencies),
+        editDeps(json.devDependencies),
       ].some(Boolean)
       if (!hit) return null
       await Bun.write(file, `${JSON.stringify(json, null, 2)}\n`)
@@ -135,14 +134,6 @@ const install = Bun.spawn([process.execPath, "install"], {
 const installCode = await install.exited
 if (installCode !== 0) process.exit(installCode)
 
-const fixed = await fixKnownLockfileIssues()
-if (fixed.length > 0) {
-  console.log("Removed stale opentui-spinner peer lockfile entries:")
-  for (const item of fixed) {
-    console.log(`- ${item}`)
-  }
-}
-
 const stale = await findStaleLockfileEntries()
 if (stale.length > 0) {
   console.error(`bun.lock still contains stale opentui versions after upgrading to ${ver}:`)
@@ -154,34 +145,8 @@ if (stale.length > 0) {
 
 console.log("bun.lock opentui versions are consistent")
 
-async function fixKnownLockfileIssues() {
-  const txt = await Bun.file(lockfile).text()
-  const stale = findStaleLockfileEntriesInText(txt)
-  if (stale.length === 0) return []
-  if (stale.some((item) => !item.entry.startsWith("opentui-spinner/@opentui/"))) return []
-
-  const removed = txt
-    .split("\n")
-    .map((line) => line.match(/^    "(opentui-spinner\/@opentui\/[^\"]+)": /)?.[1])
-    .filter((item): item is string => item !== undefined)
-
-  if (removed.length === 0) return []
-
-  await Bun.write(
-    lockfile,
-    txt
-      .split("\n")
-      .filter((line) => !line.match(/^    "opentui-spinner\/@opentui\//))
-      .join("\n"),
-  )
-  return removed
-}
-
 async function findStaleLockfileEntries() {
-  return findStaleLockfileEntriesInText(await Bun.file(lockfile).text())
-}
-
-function findStaleLockfileEntriesInText(txt: string) {
+  const txt = await Bun.file(lockfile).text()
   return Array.from(txt.matchAll(/^    "([^"]+)": \["(@opentui\/(?:core(?:-[^@"]+)?|keymap|solid))@([^"]+)"/gm))
     .map((match) => ({
       entry: match[1]!,

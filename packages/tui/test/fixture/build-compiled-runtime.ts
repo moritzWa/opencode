@@ -12,6 +12,8 @@ const result = await Bun.build({
   minify: true,
   bytecode: true,
   splitting: true,
+  // Match the CLI build: resolve one libc variant instead of bundling optional packages for both.
+  define: { "process.env.OPENTUI_LIBC": JSON.stringify(process.env.OPENTUI_LIBC ?? "glibc") },
   compile: { outfile, autoloadBunfig: false, autoloadDotenv: false, autoloadTsconfig: true, autoloadPackageJson: true },
 })
 if (!result.success) throw new AggregateError(result.logs, "Compiled runtime consumer build failed")

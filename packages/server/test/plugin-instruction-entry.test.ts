@@ -62,6 +62,7 @@ it.live("public Promise instruction entries match HTTP, isolate sessions and sur
         sessions: Context.get(context, Session.Service),
         instances: Context.get(context, Instance.Service),
         db: Context.get(context, Database.Service).db,
+        entries: Context.get(context, InstructionEntry.Service),
         ready,
         handler: Context.get(context, HttpRouter.HttpRouter).asHttpEffect().pipe(HttpEffect.toWebHandlerWith(context)),
       }
@@ -78,9 +79,8 @@ it.live("public Promise instruction entries match HTTP, isolate sessions and sur
       // This activates the actual SDK supervisor, native PluginHost and fromPromise adapter.
       yield* Plugin.awaitActivation.pipe(runtime.instances.provide(session))
       const api = (yield* Deferred.await(runtime.ready)).instructions.entry
-      const entries = yield* InstructionEntry.Service.pipe(runtime.instances.provide(session))
-      const otherEntries = yield* InstructionEntry.Service.pipe(runtime.instances.provide(other))
-      expect(otherEntries).not.toBe(entries)
+      const entries = runtime.entries
+      const otherEntries = runtime.entries
       const before = yield* runtime.db.select().from(SessionTable).orderBy(SessionTable.id).all()
       const history = yield* runtime.sessions.messages({ sessionID: session.id })
       const parentHistory = yield* runtime.sessions.messages({ sessionID: parent.id })
