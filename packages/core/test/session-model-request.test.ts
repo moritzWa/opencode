@@ -271,6 +271,31 @@ describe("SessionModelRequest.boundImages", () => {
     expect(boundImages(messages)).toBe(messages)
   })
 
+  test("shares the count limit across user and tool images and keeps the newest", () => {
+    const oldest = Message.user({ type: "media", media: Media.base64("YQ==", "image/png") })
+    const tool = (id: string) =>
+      Message.tool(
+        ToolResultPart.make({
+          id,
+          name: "read",
+          result: {
+            type: "content",
+            value: [{ type: "file", uri: "data:image/png;base64,Yg==", mime: "image/png", name: `${id}.png` }],
+          },
+        }),
+      )
+    const reads = [tool("first"), tool("second"), tool("third"), tool("fourth"), tool("fifth")]
+    const result = boundImages([oldest, ...reads], 4)
+    expect(result[0]?.content[0]).toMatchObject({ type: "text" })
+    expect(result[1]?.content[0]).toMatchObject({
+      type: "tool-result",
+      id: "first",
+      result: { value: [{ type: "text" }] },
+    })
+    expect(result.slice(2)).toEqual(reads.slice(1))
+    expect(reads[0]?.content[0]).toMatchObject({ result: { value: [{ type: "file" }] } })
+  })
+
   test("replaces oldest images until the retained payload reaches the target", () => {
     const image = "a".repeat(9 * 1024 * 1024)
     const text = Message.user("plain")

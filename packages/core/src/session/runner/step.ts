@@ -135,7 +135,11 @@ export const make = Effect.gen(function* () {
     // A local execution starts only after its Tool.Called publication completes.
     // Read to the end, not just the finish event, so the next request can reuse this response.
     // The span covers only the provider stream, so model time separates from tools, which run in this consumer.
-    const providerStream = llm.stream(input.prepared.request, input.prepared.options).pipe(
+    const providerStream = SessionModelRequest.streamWithImageLimitRecovery(
+      llm.stream,
+      input.prepared.request,
+      input.prepared.options,
+    ).pipe(
       Stream.withSpan("LLM.stream", { attributes: modelAttributes }),
       Stream.runForEach((event) =>
         Effect.gen(function* () {

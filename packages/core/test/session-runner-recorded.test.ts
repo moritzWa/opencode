@@ -40,6 +40,7 @@ import { IdentityPlugin } from "@opencode/core/plugin/identity"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Effect, Layer, Option, Tracer } from "effect"
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
 import path from "node:path"
 import { testEffect } from "./lib/effect"
 import { LocationServiceMap } from "@opencode/core/location-service-map"
@@ -65,17 +66,19 @@ const model = OpenAIChat.route
     temperature: 0,
   })
   .model({ id: "gpt-4o-mini", capabilities: { promptCacheKey: true } })
-const models = Layer.mock(SessionRunnerModel.Service)({
-  select: (session) => Effect.fail(new SessionRunnerModel.ModelNotSelectedError({ sessionID: session.id })),
-  resolve: () =>
-    Effect.succeed(
-      SessionRunnerModel.resolved(model, {
-        capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
-        cost: [],
-        limit: { context: 200_000, output: 20 },
-      }),
-    ),
-})
+const modelLayer = (selected = model) =>
+  Layer.mock(SessionRunnerModel.Service)({
+    select: (session) => Effect.fail(new SessionRunnerModel.ModelNotSelectedError({ sessionID: session.id })),
+    resolve: () =>
+      Effect.succeed(
+        SessionRunnerModel.resolved(selected, {
+          capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+          cost: [],
+          limit: { context: 200_000, output: 20 },
+        }),
+      ),
+  })
+const models = modelLayer()
 const systemContext = Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(Instructions.empty) })
 const instructionContext = Layer.mock(InstructionDiscovery.Service, {
   project: true,
@@ -96,7 +99,7 @@ const promptModels = Layer.mock(Model.Service, {
   default: () => Effect.undefined,
   small: () => Effect.undefined,
 })
-const runnerLayer = (llmClient: Layer.Layer<LLMClientService>) =>
+const runnerLayer = (llmClient: Layer.Layer<LLMClientService>, models: ReturnType<typeof modelLayer>) =>
   AppNodeBuilder.build(SessionRunnerLLM.node, [
     Snapshot.node.replace(Snapshot.noopLayer),
     LayerNodePlatform.llmClient.replace(llmClient),
@@ -112,7 +115,7 @@ const runnerLayer = (llmClient: Layer.Layer<LLMClientService>) =>
     PluginSupervisor.node.replace(Layer.empty),
     Plugin.node.replace(Layer.mock(Plugin.Service, { awaitActivation: Effect.void })),
   ])
-const execution = (llmClient: Layer.Layer<LLMClientService>) =>
+const execution = (llmClient: Layer.Layer<LLMClientService>, models: ReturnType<typeof modelLayer>) =>
   Layer.effect(
     SessionExecution.Service,
     Effect.gen(function* () {
@@ -129,8 +132,8 @@ const execution = (llmClient: Layer.Layer<LLMClientService>) =>
         awaitIdle: coordinator.awaitIdle,
       })
     }),
-  ).pipe(Layer.provide(runnerLayer(llmClient)), Layer.orDie)
-const testLayer = (llmClient: Layer.Layer<LLMClientService>) =>
+  ).pipe(Layer.provide(runnerLayer(llmClient, models)), Layer.orDie)
+const testLayer = (llmClient: Layer.Layer<LLMClientService>, selectedModels = models) =>
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
@@ -157,7 +160,7 @@ const testLayer = (llmClient: Layer.Layer<LLMClientService>) =>
       LayerNodePlatform.llmClient.replace(llmClient),
       Permission.node.replace(permission),
       Model.node.replace(promptModels),
-      SessionRunnerModel.node.replace(models),
+      SessionRunnerModel.node.replace(selectedModels),
       InstructionBuiltIns.node.replace(systemContext),
       InstructionDiscovery.node.replace(instructionContext),
       Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
@@ -167,7 +170,7 @@ const testLayer = (llmClient: Layer.Layer<LLMClientService>) =>
       Snapshot.node.replace(Snapshot.noopLayer),
       PluginSupervisor.node.replace(Layer.empty),
       Plugin.node.replace(Layer.mock(Plugin.Service, { awaitActivation: Effect.void })),
-      SessionExecution.node.replace(execution(llmClient)),
+      SessionExecution.node.replace(execution(llmClient, selectedModels)),
     ],
   )
 const spans: Tracer.NativeSpan[] = []
@@ -285,4 +288,106 @@ describe("SessionRunnerLLM recorded", () => {
       expect(stream!.status._tag).toBe("Ended")
     }).pipe(Effect.withSpan("fixture.request")),
   )
+})
+
+describe("image count at the provider boundary", () => {
+  for (const { name, tagged, providerLimit, counts } of [
+    { name: "caps the affected route before sending", tagged: true, providerLimit: 4, counts: [4] },
+    { name: "retries the affected route once at a lower reported cap", tagged: true, providerLimit: 3, counts: [4, 3] },
+    { name: "leaves other routes alone", tagged: false, providerLimit: 5, counts: [5] },
+  ]) {
+    const bodies: string[] = []
+    const responses = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) =>
+        Effect.gen(function* () {
+          const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+          const body = yield* Effect.promise(() => web.text())
+          bodies.push(body)
+          const count = [...body.matchAll(/"type":"image_url"/g)].length
+          return HttpClientResponse.fromWeb(
+            request,
+            count > providerLimit
+              ? Response.json(
+                  {
+                    error: {
+                      code: "media_count_exceeded",
+                      message: `This request has more images than the limit of ${providerLimit}. Send fewer images and try again.`,
+                    },
+                  },
+                  { status: 400 },
+                )
+              : new Response(
+                  'data: {"choices":[{"index":0,"delta":{"content":"Done"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+                  { headers: { "content-type": "text/event-stream" } },
+                ),
+          )
+        }),
+      ),
+    )
+    const route = OpenAIChat.route.with({
+      endpoint: { baseURL: "https://fixture.invalid/v1" },
+      ...(tagged ? { provider: "abliteration-ai" } : {}),
+    })
+    const testClient = LLMClient.layer.pipe(Layer.provide(RequestExecutor.layer), Layer.provide(responses))
+    const it = testEffect(
+      testLayer(testClient, modelLayer(route.model({ id: tagged ? "abliterated-model-large-flash" : "other" }))),
+    )
+    it.effect(name, () =>
+      Effect.gen(function* () {
+        const agents = yield* Agent.Service
+        yield* agents.transform((editor) =>
+          editor.update(Agent.ID.make("build"), (agent) => {
+            agent.mode = "primary"
+            agent.permissions.push({ action: "execute", resource: "*", effect: "deny" })
+          }),
+        )
+        const { db } = yield* Database.Service
+        yield* db
+          .insert(ProjectTable)
+          .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+          .onConflictDoNothing()
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: sessionID,
+            project_id: Project.ID.global,
+            slug: "test",
+            directory: "/project",
+            title: "test",
+            version: "test",
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const session = yield* Session.Service
+        const image =
+          "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        yield* session.prompt({
+          sessionID,
+          text: "Inspect these images",
+          files: Array.from({ length: 5 }, (_, i) => ({ uri: image, name: `${i}.png` })),
+          resume: false,
+        })
+        yield* session.resume(sessionID)
+        expect(bodies.map((body) => [...body.matchAll(/"type":"image_url"/g)].length)).toEqual(counts)
+        if (tagged) expect(bodies[0]).toContain("This image was removed")
+        const context = yield* session.context(sessionID)
+        expect(context[0]).toMatchObject({
+          type: "user",
+          files: Array.from({ length: 5 }, (_, i) => ({
+            name: `${i}.png`,
+            mime: "image/png",
+            data: image.split(",")[1],
+          })),
+        })
+        expect(context.at(-1)).toMatchObject({
+          type: "assistant",
+          finish: "stop",
+          content: [{ type: "text", text: "Done" }],
+        })
+      }),
+    )
+  }
 })
