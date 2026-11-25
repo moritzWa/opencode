@@ -278,7 +278,7 @@ impl Drop for Prompt {
 }
 
 fn paint(theme: &Theme, textarea: &Textarea, body: &View, edge: &View) {
-    let background = theme.decrease(&theme.background.raised.base, 1);
+    let background = theme.background.raised.base;
     textarea
         .colors(theme.text.base, background)
         .focused_colors(theme.text.base, background)
