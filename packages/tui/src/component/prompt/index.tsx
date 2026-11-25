@@ -1745,7 +1745,7 @@ export function Prompt(props: PromptProps) {
   })
   const maxHeight = createMemo(() => Math.max(6, Math.floor(dimensions().height / 3)))
 
-  const promptBg = createMemo(() => theme.decrease(theme.background.raised.base))
+  const promptBg = createMemo(() => theme.background.raised.base)
 
   return (
     <>
