@@ -2,6 +2,8 @@ export * as SessionModelRequest from "./model-request.js"
 
 import {
   ai,
+  type AIError,
+  type LLMClientService,
   AssistantMessage,
   type ContentPart,
   GENERATION_KEYS,
@@ -225,7 +227,10 @@ export const unsupportedParts = (
   provider?: string,
 ) => replaceMedia(messages, (media) => unsupportedMedia(media.mime, media.name, capabilities, provider))
 
-export const boundImages = (messages: LLMRequest["messages"]) => {
+const modelImageLimit = (model: Model.Ref) =>
+  model.providerID === "abliteration-ai" && model.id === "abliterated-model-large-flash" ? 4 : undefined
+
+export const boundImages = (messages: LLMRequest["messages"], maxCount?: number) => {
   const isImage = (mime: string) => mime.toLowerCase().startsWith("image/")
   const sizes = messages.flatMap((message) =>
     message.content.flatMap((part) => {
@@ -246,6 +251,7 @@ export const boundImages = (messages: LLMRequest["messages"]) => {
     if (kept <= IMAGE_BYTES_TRIGGER) continue
     while (kept > IMAGE_BYTES_TARGET) kept -= sizes[cut++]!
   }
+  cut = Math.max(cut, sizes.length - (maxCount ?? sizes.length))
   if (cut === 0) return messages
 
   let index = 0
@@ -254,6 +260,37 @@ export const boundImages = (messages: LLMRequest["messages"]) => {
     return index++ < cut ? IMAGE_REMOVED : undefined
   })
 }
+
+const reportedImageLimit = (error: AIError) => {
+  if (error.reason._tag !== "InvalidRequest" || error.code !== "media_count_exceeded") return
+  const match = /\bmore images than the limit of (\d+)\b/i.exec(error.message)
+  if (!match) return
+  const count = Number(match[1])
+  return Number.isSafeInteger(count) ? count : undefined
+}
+
+export const streamWithImageLimitRecovery = (
+  stream: LLMClientService["Service"]["stream"],
+  request: LLMRequest,
+  options: StreamOptions,
+) =>
+  Stream.suspend(() => {
+    let emitted = false
+    return stream(request, options).pipe(
+      Stream.tap(() =>
+        Effect.sync(() => {
+          emitted = true
+        }),
+      ),
+      Stream.catch((error) => {
+        // Once output is visible, a second request could repeat a tool call.
+        const limit = emitted ? undefined : reportedImageLimit(error)
+        if (limit === undefined) return Stream.fail(error)
+        const messages = boundImages(request.messages, limit)
+        return messages === request.messages ? Stream.fail(error) : stream({ ...request, messages }, options)
+      }),
+    )
+  })
 
 type Definitions = PluginHooks.Domains["session"]["context"]["tools"]
 
@@ -350,6 +387,7 @@ export const layer = Layer.effect(
             model.capabilities,
             model.model.provider,
           ),
+          modelImageLimit(model.ref),
         ),
         tools: Array.from(hooked, ([name, t]) => ({
           ...t,
