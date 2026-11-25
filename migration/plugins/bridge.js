@@ -126,7 +126,7 @@ export function makeClient(ctx) {
       messages: async (input) => data((await history(input)).slice(-(input?.query?.limit ?? Infinity))),
       message: async (input) => data((await history(input)).find((message) => message.info.id === input.path.messageID)),
       status: async () => data(Object.fromEntries(Object.keys(await ctx.session.active()).map((id) => [id, { type: "busy" }]))),
-      create: async (input) => data(legacySession(await ctx.session.create({ ...input?.body, location: { directory: input?.query?.directory ?? ctx.location.directory } }, { signal: input?.signal }))),
+      create: async (input) => data(legacySession(await ctx.session.create({ ...input?.body, metadata: { report: false, ...input?.body?.metadata }, location: { directory: input?.query?.directory ?? ctx.location.directory } }, { signal: input?.signal }))),
       promptAsync: (input) => inject(input),
       prompt: (input) => inject(input, true),
       abort: async (input) => data(await ctx.session.interrupt({ sessionID: sessionID(input) }, { signal: input?.signal })),
