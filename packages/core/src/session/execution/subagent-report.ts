@@ -138,8 +138,10 @@ export const make = (deps: Deps) => {
     const initial = yield* deps.store.get(sessionID)
     // A foreground tool owns delivery and cancellation. Reporting again would revive its interrupted parent.
     const foreground = jobState.mode === "none" && (yield* deps.jobs.get(sessionID))?.metadata?.foreground === true
-    // An automation run's child finishes quietly; only a follow-up the parent sent through a Job reports back.
-    if (foreground || ((!initial?.parentID || Automation.isRunSession(sessionID)) && jobState.mode === "none")) {
+    // An automation run's child, or a session that opts out with `report: false` metadata (plugin-internal forks
+    // such as memory extraction), finishes quietly; only a follow-up the parent sent through a Job reports back.
+    const quiet = Automation.isRunSession(sessionID) || initial?.metadata?.report === false
+    if (foreground || ((!initial?.parentID || quiet) && jobState.mode === "none")) {
       return {
         commit: () => deps.store.release(sessionID),
         deliver: Effect.void,

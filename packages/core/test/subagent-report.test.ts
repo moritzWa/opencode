@@ -119,6 +119,33 @@ describe("SubagentReport settlement", () => {
     }),
   )
 
+  it.effect("keeps a child quiet when its metadata opts out of reporting", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const parent = sessionID("ses_optout_parent")
+      const child = sessionID("ses_optout_child")
+      yield* seedSessions(database, [parent])
+      yield* seedSessions(database, [child], {
+        parent_id: parent,
+        agent: "opencode-memory-extract",
+        title: "opencode-memory extraction",
+        metadata: { report: false },
+      })
+      yield* seedAssistant(database, child, 100, "Saved 2 memories")
+
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () => Effect.void)
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.wake(child)
+      yield* execution.awaitIdle(child)
+      yield* execution.awaitIdle(parent)
+      expect(yield* claims(database)).toEqual({ [parent]: false, [child]: false })
+      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
+    }),
+  )
+
   it.effect("reports immediately with still-running background work and skips non-running descendants", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
@@ -750,7 +777,7 @@ function buildExecution(scope: Scope.Scope, drain: Drain) {
 }
 
 type SeedValues = Partial<
-  Pick<typeof SessionTable.$inferInsert, "time_suspended" | "resume_attempts" | "parent_id" | "title" | "revert">
+  Pick<typeof SessionTable.$inferInsert, "time_suspended" | "resume_attempts" | "parent_id" | "title" | "revert" | "metadata">
 > & { readonly agent?: string }
 
 function seedSessions(
