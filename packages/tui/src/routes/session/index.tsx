@@ -2192,13 +2192,44 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
     if (hover() && childID()) return theme.text.base
     return theme.text.feedback.info.base
   }
+  const peer = () => (metadata()?.peerMessage ? peerMessage(text()) : undefined)
+  const [expanded, setExpanded] = createSignal(false)
   return (
     <Show
       when={completion()}
       fallback={
-        <InlineToolRow icon={source() === "goal" ? "◎" : "◈"} color={theme.text.muted} pending="Notice" complete={true}>
-          {text()}
-        </InlineToolRow>
+        <Show
+          when={peer()}
+          fallback={
+            <InlineToolRow
+              icon={source() === "goal" ? "◎" : "◈"}
+              color={theme.text.muted}
+              pending="Notice"
+              complete={true}
+            >
+              {text()}
+            </InlineToolRow>
+          }
+        >
+          {(item) => (
+            <InlineToolRow
+              icon={expanded() ? "−" : "◈"}
+              color={hover() ? theme.text.base : theme.text.muted}
+              pending="Notice"
+              complete={true}
+              onMouseOver={() => setHover(true)}
+              onMouseOut={() => setHover(false)}
+              onMouseUp={() => {
+                if (renderer.getSelection()?.getSelectedText()) return
+                setExpanded((value) => !value)
+              }}
+            >
+              {expanded()
+                ? `From ${item().from}\n${item().body}`
+                : Locale.truncateWidth(`From ${item().from}: ${item().summary}`, Math.max(0, ctx.width - 3 - 2))}
+            </InlineToolRow>
+          )}
+        </Show>
       }
     >
       <box
@@ -3759,6 +3790,19 @@ function Diagnostics(props: { diagnostics: unknown; filePath: string }) {
 
 function stringValue(value: unknown) {
   return typeof value === "string" ? value : undefined
+}
+
+// The peers plugin prefixes each injected message with
+// `[from another agent, not the user: "NAME [ses_id]" @ DIR; reply with ...]`.
+function peerMessage(text: string) {
+  const match = /^\[from another agent[^"\]]*"([^"]*)"[^\]]*\]\n?([\s\S]*)$/.exec(text)
+  if (!match) return
+  const body = match[2].trim()
+  return {
+    from: match[1].replace(/\s*\[ses_[^\]]*\]$/, ""),
+    body,
+    summary: body.split("\n").find((line) => line.trim()) ?? "",
+  }
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {
